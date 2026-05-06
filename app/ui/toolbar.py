@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFormLayout, QFrame, QGridLayout, QGroupBox,
-    QHBoxLayout, QLabel, QPushButton, QScrollArea,
+    QHBoxLayout, QLabel, QPushButton,
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
@@ -235,16 +235,55 @@ class StatusBar(QWidget):
     def update_status(self, index: int, total: int, mark_info: str) -> None:
         pos = f"{index + 1} / {total}" if total else "— / —"
         mark = f"  ·  {mark_info}" if mark_info else ""
-        hint = "  ·  ← → 浏览  K 保留  1-9 文件夹  U 取消标记  M 移动"
-        self._label.setText(pos + mark + hint)
+        self._label.setText(pos + mark)
+
+
+class ShortcutsPanel(QWidget):
+    """Compact read-only reference of all keyboard shortcuts."""
+
+    _SHORTCUTS = [
+        ("←  /  →",   "上一张 / 下一张"),
+        ("K  /  Space", "标记保留 (KEEP)"),
+        ("1 – 9",      "标记到对应文件夹"),
+        ("U  /  Del",  "取消标记"),
+        ("M",          "执行移动"),
+        ("Ctrl+O",     "打开文件夹"),
+        ("Ctrl+M",     "执行移动（菜单）"),
+        ("Ctrl+Q",     "退出"),
+    ]
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        group = QGroupBox("快捷键")
+        grid = QGridLayout(group)
+        grid.setContentsMargins(6, 4, 6, 6)
+        grid.setSpacing(2)
+        grid.setColumnStretch(0, 0)
+        grid.setColumnStretch(1, 1)
+
+        for row, (key, desc) in enumerate(self._SHORTCUTS):
+            key_lbl = QLabel(key)
+            key_lbl.setStyleSheet(
+                "color: #eee; font-size: 11px; font-family: monospace;"
+                " background: #333; border-radius: 3px; padding: 1px 4px;"
+            )
+            key_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            desc_lbl = QLabel(desc)
+            desc_lbl.setStyleSheet("color: #bbb; font-size: 11px;")
+            grid.addWidget(key_lbl, row, 0)
+            grid.addWidget(desc_lbl, row, 1)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(group)
 
 
 # ---------------------------------------------------------------------------
-# Sidebar: wraps ExifPanel + StatsPanel + FolderBindingsWidget in a scroll area
+# Sidebar: plain vertical layout — no scroll area, no scrollbar
 # ---------------------------------------------------------------------------
 
 class Sidebar(QWidget):
-    """Right-side panel combining stats, EXIF info, and folder key bindings."""
+    """Right-side panel: stats, EXIF, folder bindings, shortcuts."""
 
     binding_edit_requested = Signal(int)
     default_folder_edit_requested = Signal()
@@ -252,35 +291,26 @@ class Sidebar(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumWidth(220)
-        self.setMaximumWidth(280)
+        self.setMinimumWidth(230)
+        self.setMaximumWidth(290)
 
         self.stats = StatsPanel()
         self.exif = ExifPanel()
         self.bindings = FolderBindingsWidget()
+        self.shortcuts = ShortcutsPanel()
+
         self.bindings.binding_edit_requested.connect(self.binding_edit_requested)
         self.bindings.default_folder_edit_requested.connect(self.default_folder_edit_requested)
         self.bindings.default_folder_clear_requested.connect(self.default_folder_clear_requested)
 
-        content = QWidget()
-        vbox = QVBoxLayout(content)
+        vbox = QVBoxLayout(self)
         vbox.setContentsMargins(4, 4, 4, 4)
         vbox.setSpacing(6)
-        vbox.addWidget(self.stats)
-        vbox.addWidget(self.exif)
-        vbox.addWidget(self.bindings)
-        vbox.addStretch()
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(content)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        from PySide6.QtCore import Qt
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll)
+        vbox.addWidget(self.stats,    0)
+        vbox.addWidget(self.exif,     0)
+        vbox.addWidget(self.bindings, 0)
+        vbox.addWidget(self.shortcuts, 0)
+        vbox.addStretch(1)
 
 
 # ---------------------------------------------------------------------------
