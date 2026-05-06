@@ -220,9 +220,8 @@ class Sidebar(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setWidget(content)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(
-            scroll.horizontalScrollBarPolicy().AlwaysOff  # type: ignore[attr-defined]
-        )
+        from PySide6.QtCore import Qt
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
