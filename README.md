@@ -1,0 +1,178 @@
+# QuickPic — 照片筛图工具
+
+轻量、快速的照片筛选工具，支持 JPG / RAW 配对管理，键盘驱动工作流，标记结果持久化。
+
+支持平台：**Windows · macOS**
+
+---
+
+## 安装依赖
+
+### 前提条件
+
+- Python 3.11 或更高版本
+- Git
+
+### 步骤
+
+```bash
+# 1. 克隆仓库
+git clone <仓库地址>
+cd quick_pic
+
+# 2. 创建虚拟环境
+python -m venv .venv
+
+# 3. 激活虚拟环境
+# macOS / Linux：
+source .venv/bin/activate
+# Windows（CMD）：
+.venv\Scripts\activate.bat
+# Windows（PowerShell）：
+.venv\Scripts\Activate.ps1
+
+# 4. 安装依赖
+pip install -e .
+```
+
+### 直接运行
+
+```bash
+python main.py
+```
+
+---
+
+## 打包为可执行文件
+
+打包必须在**目标平台上执行**（在 Windows 上打包 .exe，在 macOS 上打包 .app），不支持跨平台交叉编译。
+
+### 安装打包工具
+
+```bash
+pip install pyinstaller
+```
+
+### Windows：打包为 .exe
+
+```bat
+pyinstaller quick_pic.spec
+```
+
+产物位于 `dist\QuickPic\QuickPic.exe`，将整个 `dist\QuickPic\` 文件夹压缩后分发即可。
+
+### macOS：打包为 .app
+
+```bash
+pyinstaller quick_pic.spec
+# 可选：打包成 DMG（需要先安装 create-dmg）
+brew install create-dmg
+create-dmg \
+  --volname "QuickPic" \
+  --window-size 540 380 \
+  --icon-size 128 \
+  --app-drop-link 380 185 \
+  QuickPic.dmg \
+  dist/QuickPic.app
+```
+
+产物位于 `dist/QuickPic.app`。
+
+### GitHub Actions 自动构建（无需本地 Windows 环境）
+
+向仓库推送版本 tag，GitHub Actions 会自动在 Windows 和 macOS 上分别构建并上传 Artifact：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+构建配置见 `.github/workflows/build.yml`。
+
+---
+
+## 使用指南
+
+### 1. 打开照片文件夹
+
+- 菜单 **File → Open Folder(s)…**，或按 `Ctrl+O`
+- 可以连续添加多个文件夹，程序会合并所有照片并按**拍摄时间**排序
+- 同名的 JPG 和 RAW 文件（如 `IMG_001.jpg` + `IMG_001.arw`）会自动配对，只展示 JPG 以提升速度
+
+### 2. 浏览照片
+
+| 按键 | 动作 |
+|------|------|
+| `←` | 上一张 |
+| `→` | 下一张 |
+
+### 3. 标记照片
+
+| 按键 | 动作 |
+|------|------|
+| `K` 或 `Space` | 标记为**保留**（KEEP，绿色角标） |
+| `1` - `9` | 标记移动到对应绑定文件夹（蓝色角标显示键号） |
+| `U` 或 `Delete` | 取消标记 |
+
+标记结果**实时保存**到本地数据库（`~/.quickpic/data.db`），重启软件后自动恢复。
+
+### 4. 绑定文件夹到数字键
+
+在右侧面板点击 `[1]` - `[9]` 中的任意按钮，选择目标文件夹。
+
+也可以直接在浏览照片时按下未绑定的数字键，程序会弹窗提示立即绑定。
+
+绑定示例：
+
+| 键 | 文件夹用途 |
+|----|-----------|
+| `1` | D:/精选/活动A |
+| `2` | D:/精选/人物 |
+| `3` | D:/精选/风景 |
+
+### 5. 执行移动
+
+按 `M` 或菜单 **File → Move Marked Photos…**：
+
+1. 程序显示移动预览（各目标文件夹的文件数量）
+2. 如果有标记为 KEEP 但未绑定文件夹的照片，会弹窗要求指定目标路径
+3. 确认后开始移动，进度实时显示
+4. 移动完成后，JPG 和 RAW 自动分开存放：
+
+```
+目标文件夹/
+├── JPG/
+│   └── IMG_001.jpg
+└── RAW/
+    └── IMG_001.arw
+```
+
+### 6. 会话恢复
+
+下次打开程序时，会询问是否恢复上次的文件夹和浏览位置，选择「Yes」即可从上次位置继续。
+
+---
+
+## 支持的 RAW 格式
+
+| 品牌 | 后缀 |
+|------|------|
+| Sony | `.arw` |
+| Canon | `.cr2` `.cr3` |
+| Nikon | `.nef` `.nrw` |
+| Adobe | `.dng` |
+| Olympus | `.orf` |
+| Panasonic | `.rw2` |
+| Fujifilm | `.raf` |
+| Pentax | `.pef` |
+| Samsung | `.srw` |
+
+---
+
+## 数据文件位置
+
+| 文件 | 路径 |
+|------|------|
+| 数据库（标记、绑定、会话） | `~/.quickpic/data.db` |
+
+如需重置所有标记和设置，删除该文件即可。
