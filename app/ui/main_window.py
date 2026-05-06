@@ -98,6 +98,8 @@ class MainWindow(QMainWindow):
         # Right sidebar: stats + EXIF + folder key bindings
         self._sidebar = Sidebar()
         self._sidebar.binding_edit_requested.connect(self._edit_binding)
+        self._sidebar.default_folder_edit_requested.connect(self._edit_default_folder)
+        self._sidebar.default_folder_clear_requested.connect(self._clear_default_folder)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._viewer)
@@ -242,6 +244,21 @@ class MainWindow(QMainWindow):
             self._sidebar.bindings.refresh(per_key)
             self._sidebar.stats.update(*self._compute_stats())
 
+    def _edit_default_folder(self) -> None:
+        current = repository.get_default_keep_folder()
+        dlg = FolderBindingDialog(key=None, current_path=current, parent=self)
+        if dlg.exec() == FolderBindingDialog.DialogCode.Accepted:
+            path = dlg.folder_path
+            if path:
+                repository.save_default_keep_folder(path)
+            else:
+                repository.clear_default_keep_folder()
+            self._sidebar.bindings.refresh_default()
+
+    def _clear_default_folder(self) -> None:
+        repository.clear_default_keep_folder()
+        self._sidebar.bindings.refresh_default(path="")
+
     def _move_photos(self) -> None:
         pairs = self._session.pairs
         marked = [p for p in pairs if p.mark_type != MarkType.NONE]
@@ -253,14 +270,18 @@ class MainWindow(QMainWindow):
         needs_keep_folder = len(unresolved) > 0
 
         # Build summary text
-        lines = [f"Total marked: {len(marked)}"]
+        lines = [f"已标记: {len(marked)} 张"]
         if pending:
-            lines.append(f"  • {len(pending)} file pair(s) will be moved to bound folders")
+            lines.append(f"  · {len(pending)} 张将移动到绑定文件夹")
         if unresolved:
-            lines.append(f"  • {len(unresolved)} photo(s) marked KEEP need a destination folder")
+            lines.append(f"  · {len(unresolved)} 张标记为 KEEP，需要指定目标文件夹")
+
+        # Pre-fill stored default keep folder
+        stored_default = repository.get_default_keep_folder()
 
         dlg = MoveConfirmDialog(
             move_summary="\n".join(lines),
+            keep_folder=stored_default,
             needs_keep_folder=needs_keep_folder,
             parent=self,
         )
@@ -268,6 +289,12 @@ class MainWindow(QMainWindow):
             return
 
         keep_folder = dlg.keep_folder if needs_keep_folder else None
+
+        # Persist the chosen keep folder for next time
+        if keep_folder and keep_folder != stored_default:
+            repository.save_default_keep_folder(keep_folder)
+            self._sidebar.bindings.refresh_default()
+
         if unresolved and keep_folder:
             extra_pending, _ = resolve_moves(unresolved, default_keep_folder=keep_folder)
             pending.extend(extra_pending)

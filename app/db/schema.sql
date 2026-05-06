@@ -13,6 +13,12 @@ CREATE TABLE IF NOT EXISTS marks (
     marked_at   TEXT NOT NULL       -- ISO 8601 timestamp
 );
 
+-- Key-value settings (default_keep_folder, etc.)
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 -- Single-row table for session state (last opened folders + cursor position)
 CREATE TABLE IF NOT EXISTS session_state (
     id              INTEGER PRIMARY KEY CHECK (id = 1),

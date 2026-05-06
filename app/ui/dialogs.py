@@ -10,17 +10,30 @@ from PySide6.QtWidgets import (
 
 
 class FolderBindingDialog(QDialog):
-    """Dialog for assigning a folder path to a number key (1-9)."""
+    """
+    Dialog for assigning a folder path to a key (1-9) or the KEEP default slot.
 
-    def __init__(self, key: int, current_path: str = "", parent: QWidget | None = None) -> None:
+    Pass key=None for the default-folder variant (no key label shown).
+    A "清除绑定" button is shown whenever there is a current path to clear.
+    """
+
+    def __init__(
+        self,
+        key: int | None,
+        current_path: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
-        self.setWindowTitle(f"Bind folder to key [{key}]")
-        self.setMinimumWidth(480)
-        self._key = key
-        self._path = current_path
+        if key is not None:
+            self.setWindowTitle(f"绑定文件夹到键 [{key}]")
+            row_label = f"键 [{key}] → 文件夹:"
+        else:
+            self.setWindowTitle("设置 KEEP 默认文件夹")
+            row_label = "KEEP 默认文件夹:"
 
+        self.setMinimumWidth(480)
         self._path_edit = QLineEdit(current_path)
-        browse_btn = QPushButton("Browse…")
+        browse_btn = QPushButton("浏览…")
         browse_btn.clicked.connect(self._browse)
 
         path_row = QHBoxLayout()
@@ -28,13 +41,21 @@ class FolderBindingDialog(QDialog):
         path_row.addWidget(browse_btn)
 
         form = QFormLayout()
-        form.addRow(f"Key [{key}] → folder:", path_row)
+        form.addRow(row_label, path_row)
 
+        # Standard OK / Cancel
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+
+        # "清除绑定" on the left of the button box — only when something is already set
+        if current_path:
+            clear_btn = QPushButton("清除绑定")
+            clear_btn.setToolTip("移除当前绑定")
+            clear_btn.clicked.connect(self._clear)
+            buttons.addButton(clear_btn, QDialogButtonBox.ButtonRole.ResetRole)
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
@@ -42,9 +63,14 @@ class FolderBindingDialog(QDialog):
 
     def _browse(self) -> None:
         start = self._path_edit.text() or str(Path.home())
-        folder = QFileDialog.getExistingDirectory(self, "Select folder", start)
+        folder = QFileDialog.getExistingDirectory(self, "选择文件夹", start)
         if folder:
             self._path_edit.setText(folder)
+
+    def _clear(self) -> None:
+        """Clear the path and accept — caller interprets empty path as 'delete'."""
+        self._path_edit.clear()
+        self.accept()
 
     @property
     def folder_path(self) -> str:

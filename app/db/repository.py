@@ -95,6 +95,35 @@ def get_all_bindings() -> dict[int, dict]:
 
 
 # ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+_KEY_DEFAULT_KEEP_FOLDER = "default_keep_folder"
+
+
+def get_default_keep_folder() -> str:
+    with _get_connection() as conn:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (_KEY_DEFAULT_KEEP_FOLDER,)
+        ).fetchone()
+    return row["value"] if row else ""
+
+
+def save_default_keep_folder(path: str) -> None:
+    with _get_connection() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (_KEY_DEFAULT_KEEP_FOLDER, path),
+        )
+
+
+def clear_default_keep_folder() -> None:
+    with _get_connection() as conn:
+        conn.execute("DELETE FROM settings WHERE key = ?", (_KEY_DEFAULT_KEEP_FOLDER,))
+
+
+# ---------------------------------------------------------------------------
 # Session state
 # ---------------------------------------------------------------------------
 

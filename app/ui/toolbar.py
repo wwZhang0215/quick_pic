@@ -124,20 +124,30 @@ class StatsPanel(QWidget):
 
 class FolderBindingsWidget(QWidget):
     """
-    Sidebar panel showing which folder keys (1-9) are currently bound.
-    Each button opens the binding dialog when clicked.
+    Sidebar panel for folder key bindings (1-9) and the KEEP default folder.
+
+    Signals:
+        binding_edit_requested(key)         — user clicked a 1-9 key button
+        default_folder_edit_requested()     — user clicked the default folder button
+        default_folder_clear_requested()    — user clicked the × next to default folder
     """
 
-    binding_edit_requested = Signal(int)   # key number
+    binding_edit_requested = Signal(int)
+    default_folder_edit_requested = Signal()
+    default_folder_clear_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._buttons: dict[int, QPushButton] = {}
 
         group = QGroupBox("文件夹键 (1–9)")
-        grid = QGridLayout(group)
-        grid.setSpacing(4)
+        vbox = QVBoxLayout(group)
+        vbox.setContentsMargins(6, 4, 6, 6)
+        vbox.setSpacing(4)
 
+        # 3×3 grid for keys 1-9
+        grid = QGridLayout()
+        grid.setSpacing(4)
         for key in range(1, 10):
             btn = QPushButton(f"[{key}] —")
             btn.setToolTip(f"点击为键 {key} 绑定文件夹")
@@ -146,6 +156,30 @@ class FolderBindingsWidget(QWidget):
             self._buttons[key] = btn
             row, col = divmod(key - 1, 3)
             grid.addWidget(btn, row, col)
+        vbox.addLayout(grid)
+
+        # Separator
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet("color: #444;")
+        vbox.addWidget(line)
+
+        # Default keep folder row
+        vbox.addWidget(_head("KEEP 默认文件夹"))
+        default_row = QHBoxLayout()
+        default_row.setSpacing(4)
+        self._default_btn = QPushButton("— (点击设置)")
+        self._default_btn.setToolTip("标记为 KEEP 但未指定键时的默认目标文件夹")
+        self._default_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._default_btn.clicked.connect(self.default_folder_edit_requested)
+        self._default_clear_btn = QPushButton("×")
+        self._default_clear_btn.setFixedWidth(24)
+        self._default_clear_btn.setToolTip("清除默认文件夹")
+        self._default_clear_btn.setVisible(False)
+        self._default_clear_btn.clicked.connect(self.default_folder_clear_requested)
+        default_row.addWidget(self._default_btn)
+        default_row.addWidget(self._default_clear_btn)
+        vbox.addLayout(default_row)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -153,7 +187,7 @@ class FolderBindingsWidget(QWidget):
         self.refresh()
 
     def refresh(self, per_key_counts: dict[int, int] | None = None) -> None:
-        """Reload bindings from DB and update button labels."""
+        """Reload bindings from DB and update all button labels."""
         bindings = repository.get_all_bindings()
         counts = per_key_counts or {}
         for key, btn in self._buttons.items():
@@ -161,13 +195,30 @@ class FolderBindingsWidget(QWidget):
             count_str = f" ({count})" if count else ""
             if key in bindings:
                 path = bindings[key]["path"]
-                name = path.split("/")[-1] or path.split("\\")[-1] or path
+                name = _folder_name(path)
                 short = name[-18:] if len(name) > 18 else name
                 btn.setText(f"[{key}] {short}{count_str}")
                 btn.setToolTip(path)
             else:
                 btn.setText(f"[{key}] —")
                 btn.setToolTip(f"点击为键 {key} 绑定文件夹")
+
+        self.refresh_default()
+
+    def refresh_default(self, path: str | None = None) -> None:
+        """Refresh the default keep folder display. Reads DB if path is None."""
+        if path is None:
+            path = repository.get_default_keep_folder()
+        if path:
+            name = _folder_name(path)
+            short = name[-24:] if len(name) > 24 else name
+            self._default_btn.setText(short)
+            self._default_btn.setToolTip(path)
+            self._default_clear_btn.setVisible(True)
+        else:
+            self._default_btn.setText("— (点击设置)")
+            self._default_btn.setToolTip("标记为 KEEP 但未指定键时的默认目标文件夹")
+            self._default_clear_btn.setVisible(False)
 
 
 class StatusBar(QWidget):
@@ -196,6 +247,8 @@ class Sidebar(QWidget):
     """Right-side panel combining stats, EXIF info, and folder key bindings."""
 
     binding_edit_requested = Signal(int)
+    default_folder_edit_requested = Signal()
+    default_folder_clear_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -206,6 +259,8 @@ class Sidebar(QWidget):
         self.exif = ExifPanel()
         self.bindings = FolderBindingsWidget()
         self.bindings.binding_edit_requested.connect(self.binding_edit_requested)
+        self.bindings.default_folder_edit_requested.connect(self.default_folder_edit_requested)
+        self.bindings.default_folder_clear_requested.connect(self.default_folder_clear_requested)
 
         content = QWidget()
         vbox = QVBoxLayout(content)
@@ -236,3 +291,9 @@ def _head(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setStyleSheet("color: #888; font-size: 11px;")
     return lbl
+
+
+def _folder_name(path: str) -> str:
+    """Return the last path component, handling both / and \\ separators."""
+    name = path.replace("\\", "/").rstrip("/").split("/")[-1]
+    return name or path
