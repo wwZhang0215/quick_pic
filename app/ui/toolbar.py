@@ -226,8 +226,9 @@ class StatusBar(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._label = QLabel()
-        self._label.setStyleSheet("color: #ccc; padding: 4px 8px; font-size: 11px;")
+        self.setStyleSheet("background-color: #2a2a2a;")
+        self._label = QLabel("按 Ctrl+O 打开文件夹开始筛图")
+        self._label.setStyleSheet("color: #888; padding: 4px 8px; font-size: 11px;")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._label)
@@ -235,6 +236,7 @@ class StatusBar(QWidget):
     def update_status(self, index: int, total: int, mark_info: str) -> None:
         pos = f"{index + 1} / {total}" if total else "— / —"
         mark = f"  ·  {mark_info}" if mark_info else ""
+        self._label.setStyleSheet("color: #ccc; padding: 4px 8px; font-size: 11px;")
         self._label.setText(pos + mark)
 
 
