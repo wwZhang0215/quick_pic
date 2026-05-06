@@ -28,8 +28,8 @@ class FolderBindingDialog(QDialog):
             self.setWindowTitle(f"绑定文件夹到键 [{key}]")
             row_label = f"键 [{key}] → 文件夹:"
         else:
-            self.setWindowTitle("设置 KEEP 默认文件夹")
-            row_label = "KEEP 默认文件夹:"
+            self.setWindowTitle("设置默认保留文件夹")
+            row_label = "默认保留文件夹:"
 
         self.setMinimumWidth(480)
         self._path_edit = QLineEdit(current_path)

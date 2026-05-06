@@ -165,11 +165,11 @@ class FolderBindingsWidget(QWidget):
         vbox.addWidget(line)
 
         # Default keep folder row
-        vbox.addWidget(_head("KEEP 默认文件夹"))
+        vbox.addWidget(_head("默认保留文件夹"))
         default_row = QHBoxLayout()
         default_row.setSpacing(4)
         self._default_btn = QPushButton("— (点击设置)")
-        self._default_btn.setToolTip("标记为 KEEP 但未指定键时的默认目标文件夹")
+        self._default_btn.setToolTip("标记为保留但未指定文件夹键时的默认目标")
         self._default_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._default_btn.clicked.connect(self.default_folder_edit_requested)
         self._default_clear_btn = QPushButton("×")
@@ -217,7 +217,7 @@ class FolderBindingsWidget(QWidget):
             self._default_clear_btn.setVisible(True)
         else:
             self._default_btn.setText("— (点击设置)")
-            self._default_btn.setToolTip("标记为 KEEP 但未指定键时的默认目标文件夹")
+            self._default_btn.setToolTip("标记为保留但未指定文件夹键时的默认目标")
             self._default_clear_btn.setVisible(False)
 
 
