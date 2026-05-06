@@ -10,14 +10,15 @@ from PySide6.QtWidgets import (
     QProgressDialog, QSplitter, QVBoxLayout, QWidget,
 )
 
-from app.core.models import MarkType
+from app.core.exif_reader import ExifInfo, read_full_exif
+from app.core.models import MarkType, PhotoPair
 from app.core.scanner import scan_folders
 from app.db import repository
 from app.services.mark_service import MarkService
 from app.services.move_service import MoveResult, PendingMove, execute_moves, resolve_moves
 from app.services.session import PhotoSession
 from app.ui.dialogs import FolderBindingDialog, MoveConfirmDialog
-from app.ui.toolbar import FolderBindingsWidget, StatusBar
+from app.ui.toolbar import Sidebar, StatusBar
 from app.ui.viewer import PhotoViewer
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,19 @@ class _ScanWorker(QObject):
     def run(self) -> None:
         pairs = scan_folders(self._folders, progress_callback=self.progress.emit)
         self.finished.emit(pairs)
+
+
+class _ExifWorker(QObject):
+    finished = Signal(object, str)  # (ExifInfo, pair_id)
+
+    def __init__(self, file_path: str | None, pair_id: str) -> None:
+        super().__init__()
+        self._path = file_path
+        self._pair_id = pair_id
+
+    def run(self) -> None:
+        info = read_full_exif(self._path) if self._path else ExifInfo()
+        self.finished.emit(info, self._pair_id)
 
 
 class _MoveWorker(QObject):
@@ -59,6 +73,8 @@ class MainWindow(QMainWindow):
 
         self._session = PhotoSession()
         self._mark_service = MarkService(self._session)
+        self._last_exif_pair_id: str | None = None   # avoid redundant EXIF reads
+        self._exif_thread: QThread | None = None
 
         self._setup_ui()
         self._setup_shortcuts()
@@ -79,14 +95,13 @@ class MainWindow(QMainWindow):
         # Left: photo viewer
         self._viewer = PhotoViewer()
 
-        # Right sidebar: folder key bindings
-        self._bindings_widget = FolderBindingsWidget()
-        self._bindings_widget.binding_edit_requested.connect(self._edit_binding)
-        self._bindings_widget.setMaximumWidth(260)
+        # Right sidebar: stats + EXIF + folder key bindings
+        self._sidebar = Sidebar()
+        self._sidebar.binding_edit_requested.connect(self._edit_binding)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._viewer)
-        splitter.addWidget(self._bindings_widget)
+        splitter.addWidget(self._sidebar)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
 
@@ -223,7 +238,9 @@ class MainWindow(QMainWindow):
                 repository.save_binding(key, path)
             else:
                 repository.delete_binding(key)
-            self._bindings_widget.refresh()
+            per_key = self._compute_per_key()
+            self._sidebar.bindings.refresh(per_key)
+            self._sidebar.stats.update(*self._compute_stats())
 
     def _move_photos(self) -> None:
         pairs = self._session.pairs
@@ -297,25 +314,76 @@ class MainWindow(QMainWindow):
         self._viewer.display(pair)
         self._viewer.refresh_mark()
 
-        # Status bar
+        # Status bar — current mark info
         total = self._session.total
-        if pair:
-            if pair.mark_type == MarkType.NONE:
-                mark_info = ""
-            elif pair.mark_type == MarkType.KEEP:
-                mark_info = "KEEP"
-            else:
-                bindings = repository.get_all_bindings()
-                binding = bindings.get(pair.folder_key, {})
-                label = binding.get("label") or binding.get("path", f"Key {pair.folder_key}")
-                mark_info = f"→ [{pair.folder_key}] {label}"
-        else:
-            mark_info = ""
-
+        mark_info = self._mark_label(pair)
         self._status.update_status(index, total, mark_info)
 
-        # Auto-save session position
+        # Stats + bindings (cheap: iterate pairs in memory)
+        total_n, marked_n, keep_n, per_key = self._compute_stats()
+        self._sidebar.stats.update(total_n, marked_n, keep_n, per_key)
+        self._sidebar.bindings.refresh(per_key)
+
+        # EXIF — only reload when photo changes, not on every mark toggle
+        if pair is not None and pair.pair_id != self._last_exif_pair_id:
+            self._last_exif_pair_id = pair.pair_id
+            self._load_exif_async(pair)
+
+        if pair is None:
+            self._sidebar.exif.update(None)
+            self._last_exif_pair_id = None
+
+        # Persist position
         self._session.save_state()
+
+    def _mark_label(self, pair: PhotoPair | None) -> str:
+        if pair is None or pair.mark_type == MarkType.NONE:
+            return ""
+        if pair.mark_type == MarkType.KEEP:
+            return "★ KEEP"
+        bindings = repository.get_all_bindings()
+        binding = bindings.get(pair.folder_key, {})
+        dest = binding.get("label") or binding.get("path", f"键 {pair.folder_key}")
+        return f"→ [{pair.folder_key}] {dest}"
+
+    def _compute_stats(self) -> tuple[int, int, int, dict[int, int]]:
+        """Return (total, marked, keep_count, per_key_counts)."""
+        pairs = self._session.pairs
+        total = len(pairs)
+        marked = sum(1 for p in pairs if p.mark_type != MarkType.NONE)
+        keep = sum(1 for p in pairs if p.mark_type == MarkType.KEEP)
+        per_key: dict[int, int] = {}
+        for p in pairs:
+            if p.mark_type == MarkType.FOLDER_KEY and p.folder_key is not None:
+                per_key[p.folder_key] = per_key.get(p.folder_key, 0) + 1
+        return total, marked, keep, per_key
+
+    def _compute_per_key(self) -> dict[int, int]:
+        return self._compute_stats()[3]
+
+    def _load_exif_async(self, pair: PhotoPair) -> None:
+        """Read EXIF in a background thread so navigation stays responsive."""
+        # Cancel previous if still running
+        if self._exif_thread and self._exif_thread.isRunning():
+            self._exif_thread.quit()
+            self._exif_thread.wait(50)
+
+        target_path = pair.jpg_path or pair.raw_path
+        target_id = pair.pair_id
+
+        worker = _ExifWorker(target_path, target_id)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        worker.finished.connect(self._on_exif_loaded)
+        thread.started.connect(worker.run)
+        thread.finished.connect(thread.deleteLater)
+        self._exif_thread = thread
+        thread.start()
+
+    def _on_exif_loaded(self, info: ExifInfo, pair_id: str) -> None:
+        # Discard if user has already navigated away
+        if pair_id == self._last_exif_pair_id:
+            self._sidebar.exif.update(info)
 
     # ------------------------------------------------------------------
     # Close
