@@ -129,26 +129,36 @@ class MainWindow(QMainWindow):
         menu = self.menuBar()
         file_menu = menu.addMenu("文件")
         file_menu.addAction("打开文件夹…", self._open_folders, QKeySequence("Ctrl+O"))
+        file_menu.addAction("添加文件夹…", self._add_folder, QKeySequence("Ctrl+Shift+O"))
         file_menu.addSeparator()
         file_menu.addAction("移动已标记照片…", self._move_photos, QKeySequence("Ctrl+Shift+M"))
         file_menu.addSeparator()
         file_menu.addAction("退出", self.close, QKeySequence("Ctrl+Q"))
 
     def _setup_shortcuts(self) -> None:
-        QShortcut(QKeySequence(Qt.Key.Key_Left), self).activated.connect(self._session.previous)
-        QShortcut(QKeySequence(Qt.Key.Key_Right), self).activated.connect(self._session.next)
+        # Shortcuts use WindowShortcut context (default): fire only when the
+        # main window is active. Modal dialogs become the active window, so
+        # these shortcuts are automatically blocked while any dialog is open.
+        def sc(seq: str | Qt.Key) -> QShortcut:
+            s = QShortcut(QKeySequence(seq) if isinstance(seq, str) else QKeySequence(seq), self)
+            s.setContext(Qt.ShortcutContext.WindowShortcut)
+            return s
 
-        QShortcut(QKeySequence("K"), self).activated.connect(self._mark_service.toggle_keep)
-        QShortcut(QKeySequence(Qt.Key.Key_Space), self).activated.connect(self._mark_service.toggle_keep)
-        QShortcut(QKeySequence("U"), self).activated.connect(self._mark_service.unmark_current)
-        QShortcut(QKeySequence(Qt.Key.Key_Delete), self).activated.connect(self._mark_service.unmark_current)
+        sc(Qt.Key.Key_Left).activated.connect(self._session.previous)
+        sc(Qt.Key.Key_Right).activated.connect(self._session.next)
+
+        # K / Space: mark KEEP then advance; pressing again unmarks (no advance)
+        sc("K").activated.connect(self._mark_keep_and_advance)
+        sc(Qt.Key.Key_Space).activated.connect(self._mark_keep_and_advance)
+
+        # U / Delete: unmark, stay on current photo
+        sc("U").activated.connect(self._mark_service.unmark_current)
+        sc(Qt.Key.Key_Delete).activated.connect(self._mark_service.unmark_current)
 
         for key in range(1, 10):
-            QShortcut(QKeySequence(str(key)), self).activated.connect(
-                lambda k=key: self._apply_folder_key(k)
-            )
+            sc(str(key)).activated.connect(lambda k=key: self._apply_folder_key(k))
 
-        QShortcut(QKeySequence("M"), self).activated.connect(self._move_photos)
+        sc("M").activated.connect(self._move_photos)
 
     # ------------------------------------------------------------------
     # Session restore
@@ -175,23 +185,19 @@ class MainWindow(QMainWindow):
 
     def _open_folders(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "选择照片文件夹", str(Path.home()))
+        if folder:
+            self._start_scan([folder])
+
+    def _add_folder(self) -> None:
+        """添加文件夹到当前会话，与已有文件夹合并重新扫描。"""
+        folder = QFileDialog.getExistingDirectory(self, "选择额外文件夹", str(Path.home()))
         if not folder:
             return
-        folders = [folder]
-        while True:
-            reply = QMessageBox.question(
-                self, "继续添加文件夹？",
-                "是否再添加一个文件夹到本次会话？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.No:
-                break
-            extra = QFileDialog.getExistingDirectory(self, "选择额外文件夹", str(Path.home()))
-            if extra:
-                folders.append(extra)
-            else:
-                break
-        self._start_scan(folders)
+        existing = list(self._session.source_folders)
+        if folder in existing:
+            QMessageBox.information(self, "重复", "该文件夹已在当前会话中。")
+            return
+        self._start_scan(existing + [folder], start_index=self._session.index)
 
     def _start_scan(self, folders: list[str], start_index: int = 0) -> None:
         logger.debug("_start_scan thread=%d folders=%s", threading.get_ident(), folders)
@@ -253,9 +259,17 @@ class MainWindow(QMainWindow):
     # Folder key actions
     # ------------------------------------------------------------------
 
+    def _mark_keep_and_advance(self) -> None:
+        self._mark_service.toggle_keep()
+        # Advance only when the photo was just marked (not when toggled back to NONE)
+        if self._session.current and self._session.current.mark_type == MarkType.KEEP:
+            self._session.next()
+
     def _apply_folder_key(self, key: int) -> None:
         ok = self._mark_service.apply_folder_key(key)
-        if not ok:
+        if ok:
+            self._session.next()
+        else:
             reply = QMessageBox.question(
                 self, f"键 [{key}] 未绑定",
                 f"键 [{key}] 尚未绑定文件夹，是否现在绑定？",

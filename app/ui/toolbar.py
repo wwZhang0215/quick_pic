@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 
 from app.core.exif_reader import ExifInfo
 from app.db import repository
+from app.ui.shortcuts import SHORTCUTS
 
 
 class ExifPanel(QWidget):
@@ -112,7 +113,7 @@ class StatsPanel(QWidget):
             count = per_key[key]
             label = bindings.get(key, {}).get("label") or ""
             path = bindings.get(key, {}).get("path", "")
-            name = label or (path.split("/")[-1] or path.split("\\")[-1] if path else f"键 {key}")
+            name = label or (_folder_name(path) if path else f"键 {key}")
             rows.append((f"[{key}] {name}", count))
 
         for name, count in rows:
@@ -243,17 +244,6 @@ class StatusBar(QWidget):
 class ShortcutsPanel(QWidget):
     """Compact read-only reference of all keyboard shortcuts."""
 
-    _SHORTCUTS = [
-        ("←  /  →",   "上一张 / 下一张"),
-        ("K  /  Space", "标记保留 (KEEP)"),
-        ("1 – 9",      "标记到对应文件夹"),
-        ("U  /  Del",  "取消标记"),
-        ("M",          "执行移动"),
-        ("Ctrl+O",     "打开文件夹"),
-        ("Ctrl+Shift+M", "执行移动（菜单）"),
-        ("Ctrl+Q",     "退出"),
-    ]
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         group = QGroupBox("快捷键")
@@ -263,7 +253,7 @@ class ShortcutsPanel(QWidget):
         grid.setColumnStretch(0, 0)
         grid.setColumnStretch(1, 1)
 
-        for row, (key, desc) in enumerate(self._SHORTCUTS):
+        for row, (key, desc) in enumerate(SHORTCUTS):
             key_lbl = QLabel(key)
             key_lbl.setStyleSheet(
                 "color: #eee; font-size: 11px; font-family: monospace;"

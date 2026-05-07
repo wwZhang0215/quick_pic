@@ -5,8 +5,12 @@ import threading
 import time
 
 from PySide6.QtCore import Qt, QThread, Signal, QObject
-from PySide6.QtGui import QPixmap, QColor, QPainter, QFont
-from PySide6.QtWidgets import QLabel, QSizePolicy, QWidget, QVBoxLayout
+from PySide6.QtGui import QColor, QFont, QPixmap, QPainter, QWheelEvent
+from PySide6.QtWidgets import (
+    QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene,
+    QGraphicsSimpleTextItem, QGraphicsView,
+    QLabel, QVBoxLayout, QWidget,
+)
 
 from app.core.models import MarkType, PhotoPair
 from app.core.thumbnail import get_display_bytes
@@ -25,11 +29,9 @@ class _ImageLoader(QObject):
 
     def run(self) -> None:
         t0 = time.monotonic()
-        tid = threading.get_ident()
-        logger.debug("_ImageLoader.run START path=%s thread=%d", self._pair.display_path, tid)
+        logger.debug("_ImageLoader.run START path=%s thread=%d", self._pair.display_path, threading.get_ident())
         data = get_display_bytes(self._pair.display_path)
-        elapsed = (time.monotonic() - t0) * 1000
-        logger.debug("_ImageLoader.run DONE %d bytes (%.1fms) thread=%d", len(data) if data else 0, elapsed, tid)
+        logger.debug("_ImageLoader.run DONE %d bytes %.1fms", len(data) if data else 0, (time.monotonic() - t0) * 1000)
         if data:
             self.loaded.emit(data, self._pair.pair_id)
         else:
@@ -43,29 +45,134 @@ _MARK_COLORS: dict[MarkType, QColor | None] = {
 }
 
 
+class _PhotoView(QGraphicsView):
+    """
+    Zoomable, pannable photo canvas.
+    - Scroll wheel: zoom in/out around cursor
+    - Click and drag: pan
+    - Double-click: reset to fit view
+    """
+
+    _ZOOM_STEP = 1.15
+
+    def __init__(self, parent=None) -> None:
+        scene = QGraphicsScene()
+        super().__init__(scene, parent)
+        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setStyleSheet("background-color: #1a1a1a; border: none;")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        self._img = QGraphicsPixmapItem()
+        self._img.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+        scene.addItem(self._img)
+
+        self._tint = QGraphicsRectItem()
+        self._tint.setPen(Qt.PenStyle.NoPen)
+        self._tint.setVisible(False)
+        scene.addItem(self._tint)
+
+        self._badge = QGraphicsSimpleTextItem()
+        f = QFont()
+        f.setBold(True)
+        f.setPointSize(14)
+        self._badge.setFont(f)
+        self._badge.setBrush(QColor(255, 255, 255))
+        self._badge.setVisible(False)
+        scene.addItem(self._badge)
+
+        self._fit_mode = True
+
+    # ------------------------------------------------------------------
+    # Content API
+    # ------------------------------------------------------------------
+
+    def load_pixmap(self, px: QPixmap) -> None:
+        self._img.setPixmap(px)
+        self.scene().setSceneRect(self._img.boundingRect())
+        self._fit_mode = True
+        self._do_fit()
+
+    def set_mark(self, color: QColor | None, badge: str) -> None:
+        has_img = not self._img.pixmap().isNull()
+        if color and has_img:
+            self._tint.setRect(self._img.boundingRect())
+            self._tint.setBrush(color)
+            self._tint.setVisible(True)
+        else:
+            self._tint.setVisible(False)
+
+        if badge and has_img:
+            self._badge.setText(badge)
+            br = self._img.boundingRect()
+            bb = self._badge.boundingRect()
+            self._badge.setPos(br.right() - bb.width() - 10, br.top() + 10)
+            self._badge.setVisible(True)
+        else:
+            self._badge.setVisible(False)
+
+    def clear_image(self) -> None:
+        self._img.setPixmap(QPixmap())
+        self._tint.setVisible(False)
+        self._badge.setVisible(False)
+
+    # ------------------------------------------------------------------
+    # Zoom / pan
+    # ------------------------------------------------------------------
+
+    def wheelEvent(self, event: QWheelEvent) -> None:  # type: ignore[override]
+        self._fit_mode = False
+        f = self._ZOOM_STEP if event.angleDelta().y() > 0 else 1 / self._ZOOM_STEP
+        self.scale(f, f)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # type: ignore[override]
+        self._fit_mode = True
+        self._do_fit()
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        if self._fit_mode and not self._img.pixmap().isNull():
+            self._do_fit()
+
+    def _do_fit(self) -> None:
+        if not self._img.pixmap().isNull():
+            self.fitInView(self._img, Qt.AspectRatioMode.KeepAspectRatio)
+
+
 class PhotoViewer(QWidget):
     """
     Displays the current photo with a mark overlay.
-    Image loading runs in a background thread; results arrive via Qt signals
-    using AutoConnection so they are always dispatched to the main thread.
+    Scroll wheel zooms; drag pans; double-click resets to fit.
+    Image loading runs in a background thread.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
         self._current_pair: PhotoPair | None = None
         self._pending_pair_id: str | None = None
-        self._raw_pixmap: QPixmap | None = None
-        self._loader: _ImageLoader | None = None   # strong ref prevents GC
+        self._loader: _ImageLoader | None = None
         self._loader_thread: QThread | None = None
 
-        self._label = QLabel(self)
-        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self._label.setStyleSheet("background-color: #1a1a1a;")
-
+        self._view = _PhotoView()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._label)
+        layout.addWidget(self._view)
+
+        # Floating status text (transparent overlay, passes mouse events through)
+        self._status_lbl = QLabel(self)
+        self._status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._status_lbl.setStyleSheet("color: #888; font-size: 14px; background: transparent;")
+        self._status_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._set_status("按 Ctrl+O 打开文件夹")
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._status_lbl.setGeometry(self.rect())
 
     # ------------------------------------------------------------------
     # Public API
@@ -76,43 +183,34 @@ class PhotoViewer(QWidget):
         if pair is self._current_pair:
             return
 
-        tid = threading.get_ident()
-        logger.debug("viewer.display ENTER pair=%s thread=%d", pair.pair_id if pair else None, tid)
-
+        logger.debug("viewer.display pair=%s thread=%d", pair.pair_id if pair else None, threading.get_ident())
         self._current_pair = pair
-        self._raw_pixmap = None
 
         if pair is None:
-            self._label.clear()
-            self._label.setText("No photos loaded")
+            self._set_status("No photos loaded")
             return
 
-        self._label.setText("Loading…")
+        self._set_status("Loading…")
         self._pending_pair_id = pair.pair_id
 
-        # Keep strong references so neither loader nor thread are GC'd before the
-        # signal fires. Without self._loader the loader object is immediately
-        # eligible for collection, causing the loaded signal to never arrive (or
-        # worse, crashing the worker thread when it tries to emit).
         loader = _ImageLoader(pair)
         thread = QThread(self)
         loader.moveToThread(thread)
-        loader.loaded.connect(self._on_loaded)    # AutoConnection → main thread
-        loader.failed.connect(self._on_failed)    # AutoConnection → main thread
+        loader.loaded.connect(self._on_loaded)
+        loader.failed.connect(self._on_failed)
         thread.started.connect(loader.run)
         thread.finished.connect(loader.deleteLater)
         thread.finished.connect(thread.deleteLater)
         self._loader = loader
         self._loader_thread = thread
         thread.start()
-        logger.debug("viewer.display: loader thread started, thread=%d", tid)
 
     def refresh_mark(self) -> None:
-        """Re-render the overlay when mark state changes without reloading the image."""
-        self._update_display()
+        """Re-render the mark overlay without reloading the image."""
+        self._update_mark()
 
     def stop_loading(self) -> None:
-        """Stop all in-flight image loader threads (including orphaned old ones)."""
+        """Stop all in-flight loader threads. Call before widget destruction."""
         for thread in self.findChildren(QThread):
             if thread.isRunning():
                 thread.quit()
@@ -123,66 +221,35 @@ class PhotoViewer(QWidget):
     # ------------------------------------------------------------------
 
     def _on_loaded(self, data: bytes, pair_id: str) -> None:
-        tid = threading.get_ident()
-        logger.debug("viewer._on_loaded pair_id=%s pending=%s thread=%d", pair_id, self._pending_pair_id, tid)
+        logger.debug("viewer._on_loaded pair_id=%s pending=%s thread=%d", pair_id, self._pending_pair_id, threading.get_ident())
         if pair_id != self._pending_pair_id:
-            logger.debug("viewer._on_loaded: stale result, discarding")
             return
-        t0 = time.monotonic()
-        pixmap = QPixmap()
-        pixmap.loadFromData(data)
-        logger.debug("viewer._on_loaded: QPixmap loaded (%.1fms)", (time.monotonic() - t0) * 1000)
-        self._raw_pixmap = pixmap
-        self._update_display()
+        px = QPixmap()
+        px.loadFromData(data)
+        self._view.load_pixmap(px)
+        self._status_lbl.setVisible(False)
+        self._update_mark()
 
     def _on_failed(self, pair_id: str) -> None:
-        logger.debug("viewer._on_failed pair_id=%s thread=%d", pair_id, threading.get_ident())
         if pair_id != self._pending_pair_id:
             return
-        self._label.setText("Cannot display image")
+        self._set_status("Cannot display image")
 
-    def _update_display(self) -> None:
-        if self._raw_pixmap is None or self._raw_pixmap.isNull():
-            return
-
-        scaled = self._raw_pixmap.scaled(
-            self._label.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-
+    def _update_mark(self) -> None:
         pair = self._current_pair
-        if pair is None or pair.mark_type == MarkType.NONE:
-            self._label.setPixmap(scaled)
+        if pair is None:
             return
-
-        result = QPixmap(scaled)
-        painter = QPainter(result)
-        overlay_color = _MARK_COLORS.get(pair.mark_type)
-        if overlay_color:
-            painter.fillRect(result.rect(), overlay_color)
-
+        color = _MARK_COLORS.get(pair.mark_type)
         if pair.mark_type == MarkType.KEEP:
-            badge_text = "KEEP"
+            badge = "KEEP"
         elif pair.mark_type == MarkType.FOLDER_KEY:
-            badge_text = f"[{pair.folder_key}]"
+            badge = f"[{pair.folder_key}]"
         else:
-            badge_text = ""
+            badge = ""
+        self._view.set_mark(color, badge)
 
-        if badge_text:
-            font = QFont()
-            font.setBold(True)
-            font.setPointSize(14)
-            painter.setFont(font)
-            painter.setPen(QColor(255, 255, 255))
-            painter.drawText(
-                result.rect().adjusted(0, 10, -10, 0),
-                Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight,
-                badge_text,
-            )
-        painter.end()
-        self._label.setPixmap(result)
-
-    def resizeEvent(self, event) -> None:  # type: ignore[override]
-        super().resizeEvent(event)
-        self._update_display()
+    def _set_status(self, text: str) -> None:
+        self._view.clear_image()
+        self._status_lbl.setText(text)
+        self._status_lbl.setVisible(True)
+        self._status_lbl.raise_()
