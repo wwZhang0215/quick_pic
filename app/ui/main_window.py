@@ -395,7 +395,7 @@ class MainWindow(QMainWindow):
         logger.debug("_on_session_change: viewer updated (%.1fms)", (time.monotonic() - t0) * 1000)
 
         total = self._session.total
-        self._status.update_status(index, total, self._mark_label(pair))
+        self._status.update_status(index, total, self._mark_label(pair), Path(pair.display_path).name if pair else "")
 
         total_n, marked_n, keep_n, per_key = self._compute_stats()
         self._sidebar.stats.update(total_n, marked_n, keep_n, per_key)
@@ -472,8 +472,7 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _stop_threads(self) -> None:
-        self._viewer.stop_loading()
-        for thread in (self._scan_thread, self._move_thread, self._exif_thread):
-            if thread and thread.isRunning():
+        for thread in self.findChildren(QThread):
+            if thread.isRunning():
                 thread.quit()
                 thread.wait(2000)

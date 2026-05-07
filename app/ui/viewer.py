@@ -112,10 +112,11 @@ class PhotoViewer(QWidget):
         self._update_display()
 
     def stop_loading(self) -> None:
-        """Stop any in-flight image loader thread. Call before widget destruction."""
-        if self._loader_thread and self._loader_thread.isRunning():
-            self._loader_thread.quit()
-            self._loader_thread.wait(2000)
+        """Stop all in-flight image loader threads (including orphaned old ones)."""
+        for thread in self.findChildren(QThread):
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(2000)
 
     # ------------------------------------------------------------------
     # Slots (always called on main thread via AutoConnection)

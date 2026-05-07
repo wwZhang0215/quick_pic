@@ -1,6 +1,6 @@
 """
 Backend integration tests: scan → session → mark → move pipeline.
-No Qt dependency. Uses real files from /Users/xpeng/Downloads/10660505.
+No Qt dependency. Uses synthetic photo files created by tmp_photo_dir fixture.
 """
 from __future__ import annotations
 
@@ -14,13 +14,7 @@ from app.db import repository
 from app.services.mark_service import MarkService
 from app.services.move_service import execute_moves, resolve_moves
 from app.services.session import PhotoSession
-
-
-# ---------------------------------------------------------------------------
-# scan_folders
-# ---------------------------------------------------------------------------
-
-_EXPECTED_PAIRS = len(list(__import__('pathlib').Path("/Users/xpeng/Downloads/10660505").glob("*.JPG")))
+from tests.conftest import PHOTO_COUNT as _EXPECTED_PAIRS
 
 
 class TestScanFolders:

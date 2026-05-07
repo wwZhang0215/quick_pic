@@ -143,20 +143,18 @@ class FolderBindingsWidget(QWidget):
         group = QGroupBox("文件夹键 (1–9)")
         vbox = QVBoxLayout(group)
         vbox.setContentsMargins(6, 4, 6, 6)
-        vbox.setSpacing(4)
+        vbox.setSpacing(3)
 
-        # 3×3 grid for keys 1-9
-        grid = QGridLayout()
-        grid.setSpacing(4)
+        # Vertical list for keys 1-9 (shows full name + count)
         for key in range(1, 10):
             btn = QPushButton(f"[{key}] —")
             btn.setToolTip(f"点击为键 {key} 绑定文件夹")
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            btn.setMinimumHeight(26)
+            btn.setStyleSheet("text-align: left; padding: 4px 6px;")
             btn.clicked.connect(lambda checked=False, k=key: self.binding_edit_requested.emit(k))
             self._buttons[key] = btn
-            row, col = divmod(key - 1, 3)
-            grid.addWidget(btn, row, col)
-        vbox.addLayout(grid)
+            vbox.addWidget(btn)
 
         # Separator
         line = QFrame()
@@ -192,11 +190,11 @@ class FolderBindingsWidget(QWidget):
         counts = per_key_counts or {}
         for key, btn in self._buttons.items():
             count = counts.get(key, 0)
-            count_str = f" ({count})" if count else ""
+            count_str = f"  ({count}张)" if count else ""
             if key in bindings:
                 path = bindings[key]["path"]
                 name = _folder_name(path)
-                short = name[-18:] if len(name) > 18 else name
+                short = name[:22] if len(name) > 22 else name
                 btn.setText(f"[{key}] {short}{count_str}")
                 btn.setToolTip(path)
             else:
@@ -226,18 +224,20 @@ class StatusBar(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setFixedHeight(24)
         self.setStyleSheet("background-color: #2a2a2a;")
         self._label = QLabel("按 Ctrl+O 打开文件夹开始筛图")
-        self._label.setStyleSheet("color: #888; padding: 4px 8px; font-size: 11px;")
+        self._label.setStyleSheet("color: #888; padding: 0 8px; font-size: 11px;")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._label)
 
-    def update_status(self, index: int, total: int, mark_info: str) -> None:
+    def update_status(self, index: int, total: int, mark_info: str, filename: str = "") -> None:
         pos = f"{index + 1} / {total}" if total else "— / —"
+        name = f"  {filename}" if filename else ""
         mark = f"  ·  {mark_info}" if mark_info else ""
-        self._label.setStyleSheet("color: #ccc; padding: 4px 8px; font-size: 11px;")
-        self._label.setText(pos + mark)
+        self._label.setStyleSheet("color: #ccc; padding: 0 8px; font-size: 11px;")
+        self._label.setText(pos + name + mark)
 
 
 class ShortcutsPanel(QWidget):
@@ -250,7 +250,7 @@ class ShortcutsPanel(QWidget):
         ("U  /  Del",  "取消标记"),
         ("M",          "执行移动"),
         ("Ctrl+O",     "打开文件夹"),
-        ("Ctrl+M",     "执行移动（菜单）"),
+        ("Ctrl+Shift+M", "执行移动（菜单）"),
         ("Ctrl+Q",     "退出"),
     ]
 
@@ -281,7 +281,7 @@ class ShortcutsPanel(QWidget):
 
 
 # ---------------------------------------------------------------------------
-# Sidebar: plain vertical layout — no scroll area, no scrollbar
+# Sidebar: scrollable vertical panel
 # ---------------------------------------------------------------------------
 
 class Sidebar(QWidget):
@@ -293,8 +293,8 @@ class Sidebar(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumWidth(230)
-        self.setMaximumWidth(290)
+        self.setMinimumWidth(280)
+        self.setMaximumWidth(420)
 
         self.stats = StatsPanel()
         self.exif = ExifPanel()

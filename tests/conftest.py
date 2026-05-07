@@ -1,25 +1,23 @@
 """Pytest fixtures for QuickPic tests."""
 from __future__ import annotations
 
-import os
-import shutil
-import tempfile
 from pathlib import Path
-from unittest import mock
 
 import pytest
 
-# Test photo source directory
-_PHOTO_SRC = Path("/Users/xpeng/Downloads/10660505")
+# Number of synthetic photo pairs created by tmp_photo_dir
+PHOTO_COUNT = 6
 
 
 @pytest.fixture()
 def tmp_photo_dir(tmp_path: Path) -> Path:
-    """Copy test photos into a fresh temp directory."""
-    if not _PHOTO_SRC.is_dir():
-        pytest.skip(f"Test photo folder not found: {_PHOTO_SRC}")
+    """Create a temp directory with synthetic JPG+ARW file pairs for testing."""
     dest = tmp_path / "photos"
-    shutil.copytree(_PHOTO_SRC, dest)
+    dest.mkdir()
+    for i in range(1, PHOTO_COUNT + 1):
+        stem = f"IMG_{i:04d}"
+        (dest / f"{stem}.JPG").write_bytes(b"fake-jpg")
+        (dest / f"{stem}.ARW").write_bytes(b"fake-raw")
     return dest
 
 
