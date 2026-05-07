@@ -54,7 +54,6 @@ class PhotoViewer(QWidget):
         super().__init__(parent)
         self._current_pair: PhotoPair | None = None
         self._pending_pair_id: str | None = None
-        self._thread: QThread | None = None
 
         self._label = QLabel(self)
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -80,11 +79,6 @@ class PhotoViewer(QWidget):
             self._label.setText("No photos loaded")
             return
 
-        # Cancel any in-flight load
-        if self._thread and self._thread.isRunning():
-            self._thread.quit()
-            self._thread.wait(100)
-
         self._label.setText("Loading…")
         self._pending_pair_id = pair.pair_id
 
@@ -94,8 +88,8 @@ class PhotoViewer(QWidget):
         loader.loaded.connect(self._on_loaded)
         loader.failed.connect(self._on_failed)
         thread.started.connect(loader.run)
+        thread.finished.connect(loader.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        self._thread = thread
         thread.start()
 
     def refresh_mark(self) -> None:

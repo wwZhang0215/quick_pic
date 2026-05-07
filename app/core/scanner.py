@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Callable
@@ -58,6 +59,7 @@ def scan_folders(
     # Step 3: Build PhotoPair objects (no EXIF reads)
     pairs: list[PhotoPair] = []
     total = len(groups)
+    _last_progress = 0.0
     for i, ((folder, stem), paths) in enumerate(groups.items()):
         pair = PhotoPair(
             stem=stem,
@@ -68,7 +70,10 @@ def scan_folders(
         pairs.append(pair)
 
         if progress_callback is not None:
-            progress_callback(i + 1, total)
+            now = time.monotonic()
+            if now - _last_progress >= 0.05 or i == total - 1:
+                progress_callback(i + 1, total)
+                _last_progress = now
 
     # Step 4: Sort by folder then filename stem
     pairs.sort(key=lambda p: (p.folder, p.stem))

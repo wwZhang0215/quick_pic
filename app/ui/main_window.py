@@ -214,7 +214,6 @@ class MainWindow(QMainWindow):
     def _on_scan_done(self, pairs, folders, start_index, progress, thread) -> None:
         progress.close()
         thread.quit()
-        thread.wait()
         if not pairs:
             QMessageBox.information(self, "No photos", "No photos found in selected folder(s).")
             return
