@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QThread, Signal, QObject
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QMainWindow, QMessageBox,
+    QFileDialog, QMainWindow, QMessageBox,
     QProgressDialog, QSplitter, QVBoxLayout, QWidget,
 )
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 class _ScanWorker(QObject):
-    finished = Signal(list)  # list[PhotoPair]
+    finished = Signal(list)   # list[PhotoPair]
     progress = Signal(int, int)
 
     def __init__(self, folders: list[str]) -> None:
@@ -37,13 +37,12 @@ class _ScanWorker(QObject):
     def run(self) -> None:
         logger.debug("_ScanWorker.run START thread=%d", threading.get_ident())
         pairs = scan_folders(self._folders, progress_callback=self.progress.emit)
-        logger.debug("_ScanWorker.run DONE %d pairs, emitting finished thread=%d", len(pairs), threading.get_ident())
+        logger.debug("_ScanWorker.run DONE %d pairs thread=%d", len(pairs), threading.get_ident())
         self.finished.emit(pairs)
-        logger.debug("_ScanWorker.run finished.emit returned thread=%d", threading.get_ident())
 
 
 class _ExifWorker(QObject):
-    finished = Signal(object, str)  # (ExifInfo, pair_id)
+    finished = Signal(object, str)   # (ExifInfo, pair_id)
 
     def __init__(self, file_path: str | None, pair_id: str) -> None:
         super().__init__()
@@ -56,7 +55,7 @@ class _ExifWorker(QObject):
 
 
 class _MoveWorker(QObject):
-    finished = Signal(object)  # MoveResult
+    finished = Signal(object)   # MoveResult
     progress = Signal(int, int)
 
     def __init__(self, pending: list[PendingMove]) -> None:
@@ -64,7 +63,9 @@ class _MoveWorker(QObject):
         self._pending = pending
 
     def run(self) -> None:
+        logger.debug("_MoveWorker.run START thread=%d", threading.get_ident())
         result = execute_moves(self._pending, progress_callback=self.progress.emit)
+        logger.debug("_MoveWorker.run DONE moved=%d thread=%d", result.moved, threading.get_ident())
         self.finished.emit(result)
 
 
@@ -78,15 +79,22 @@ class MainWindow(QMainWindow):
 
         self._session = PhotoSession()
         self._mark_service = MarkService(self._session)
-        self._last_exif_pair_id: str | None = None   # avoid redundant EXIF reads
+        self._last_exif_pair_id: str | None = None
         self._exif_thread: QThread | None = None
+
+        # Scan context — stored as instance vars so _on_scan_done needs no lambda
+        self._scan_thread: QThread | None = None
+        self._scan_folders: list[str] = []
+        self._scan_start_index: int = 0
+        self._scan_progress_dlg: QProgressDialog | None = None
+
+        # Move context — same pattern
+        self._move_thread: QThread | None = None
+        self._move_progress_dlg: QProgressDialog | None = None
 
         self._setup_ui()
         self._setup_shortcuts()
-
         self._session.on_change(self._on_session_change)
-
-        # Offer to restore last session
         self._try_restore_session()
 
     # ------------------------------------------------------------------
@@ -97,10 +105,8 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
 
-        # Left: photo viewer
         self._viewer = PhotoViewer()
 
-        # Right sidebar: stats + EXIF + folder key bindings
         self._sidebar = Sidebar()
         self._sidebar.binding_edit_requested.connect(self._edit_binding)
         self._sidebar.default_folder_edit_requested.connect(self._edit_default_folder)
@@ -112,7 +118,6 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
 
-        # Bottom status bar
         self._status = StatusBar()
 
         layout = QVBoxLayout(central)
@@ -121,33 +126,28 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter)
         layout.addWidget(self._status)
 
-        # Menu bar
         menu = self.menuBar()
-        file_menu = menu.addMenu("File")
-        file_menu.addAction("Open Folder(s)…", self._open_folders, QKeySequence("Ctrl+O"))
+        file_menu = menu.addMenu("文件")
+        file_menu.addAction("打开文件夹…", self._open_folders, QKeySequence("Ctrl+O"))
         file_menu.addSeparator()
-        file_menu.addAction("Move Marked Photos…", self._move_photos, QKeySequence("Ctrl+M"))
+        file_menu.addAction("移动已标记照片…", self._move_photos, QKeySequence("Ctrl+Shift+M"))
         file_menu.addSeparator()
-        file_menu.addAction("Quit", self.close, QKeySequence("Ctrl+Q"))
+        file_menu.addAction("退出", self.close, QKeySequence("Ctrl+Q"))
 
     def _setup_shortcuts(self) -> None:
-        # Navigation
         QShortcut(QKeySequence(Qt.Key.Key_Left), self).activated.connect(self._session.previous)
         QShortcut(QKeySequence(Qt.Key.Key_Right), self).activated.connect(self._session.next)
 
-        # Marking
         QShortcut(QKeySequence("K"), self).activated.connect(self._mark_service.toggle_keep)
         QShortcut(QKeySequence(Qt.Key.Key_Space), self).activated.connect(self._mark_service.toggle_keep)
         QShortcut(QKeySequence("U"), self).activated.connect(self._mark_service.unmark_current)
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self).activated.connect(self._mark_service.unmark_current)
 
-        # Folder keys 1-9
         for key in range(1, 10):
             QShortcut(QKeySequence(str(key)), self).activated.connect(
                 lambda k=key: self._apply_folder_key(k)
             )
 
-        # Move
         QShortcut(QKeySequence("M"), self).activated.connect(self._move_photos)
 
     # ------------------------------------------------------------------
@@ -158,39 +158,35 @@ class MainWindow(QMainWindow):
         saved = repository.get_session()
         if not saved or not saved["source_folders"]:
             return
-        folders = saved["source_folders"]
-        # Verify at least one folder still exists
-        existing = [f for f in folders if Path(f).is_dir()]
+        existing = [f for f in saved["source_folders"] if Path(f).is_dir()]
         if not existing:
             return
         reply = QMessageBox.question(
-            self,
-            "Restore session",
-            f"Restore last session?\n\n{chr(10).join(existing[:5])}",
+            self, "恢复上次会话",
+            f"恢复上次会话？\n\n{chr(10).join(existing[:5])}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
             self._start_scan(existing, start_index=saved["last_index"])
 
     # ------------------------------------------------------------------
-    # Actions
+    # Scan
     # ------------------------------------------------------------------
 
     def _open_folders(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Select photo folder", str(Path.home()))
+        folder = QFileDialog.getExistingDirectory(self, "选择照片文件夹", str(Path.home()))
         if not folder:
             return
-        # Allow adding more folders
         folders = [folder]
         while True:
             reply = QMessageBox.question(
-                self, "Add more folders?",
-                "Add another folder to the current session?",
+                self, "继续添加文件夹？",
+                "是否再添加一个文件夹到本次会话？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.No:
                 break
-            extra = QFileDialog.getExistingDirectory(self, "Select additional folder", str(Path.home()))
+            extra = QFileDialog.getExistingDirectory(self, "选择额外文件夹", str(Path.home()))
             if extra:
                 folders.append(extra)
             else:
@@ -198,59 +194,71 @@ class MainWindow(QMainWindow):
         self._start_scan(folders)
 
     def _start_scan(self, folders: list[str], start_index: int = 0) -> None:
-        logger.debug("_start_scan called thread=%d folders=%s", threading.get_ident(), folders)
-        self._scan_progress_dialog = QProgressDialog("正在扫描照片…", None, 0, 0, self)
-        self._scan_progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        self._scan_progress_dialog.setMinimumDuration(0)
-        self._scan_progress_dialog.setValue(0)
-        self._scan_progress_dialog.show()
-        logger.debug("_start_scan: progress dialog shown")
+        logger.debug("_start_scan thread=%d folders=%s", threading.get_ident(), folders)
 
-        self._scan_worker = _ScanWorker(folders)   # keep reference
+        # Store context so _on_scan_done can read it without a lambda
+        self._scan_folders = folders
+        self._scan_start_index = start_index
+
+        dlg = QProgressDialog("正在扫描照片…", None, 0, 0, self)
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setValue(0)
+        dlg.show()
+        self._scan_progress_dlg = dlg
+
+        worker = _ScanWorker(folders)
+        self._scan_worker = worker   # keep reference — prevents premature GC
         thread = QThread(self)
-        self._scan_worker.moveToThread(thread)
-        self._scan_worker.finished.connect(
-            lambda pairs: self._on_scan_done(pairs, folders, start_index, self._scan_progress_dialog, thread),
-            Qt.ConnectionType.QueuedConnection,
-        )
-        self._scan_worker.progress.connect(self._on_scan_progress)
-        thread.started.connect(self._scan_worker.run)
-        thread.finished.connect(self._scan_worker.deleteLater)
-        logger.debug("_start_scan: starting thread")
+        worker.moveToThread(thread)
+
+        # Connect to real methods only — Qt AutoConnection detects thread boundary
+        # and uses QueuedConnection automatically, ensuring slots run on main thread.
+        worker.finished.connect(self._on_scan_done)
+        worker.progress.connect(self._on_scan_progress)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+
         thread.start()
         self._scan_thread = thread
-        logger.debug("_start_scan: thread.start() returned (thread is running in background)")
+        logger.debug("_start_scan: thread started")
 
-    def _on_scan_done(self, pairs, folders, start_index, progress, thread) -> None:
+    def _on_scan_done(self, pairs: list) -> None:
         t0 = time.monotonic()
         logger.debug("_on_scan_done ENTER thread=%d pairs=%d", threading.get_ident(), len(pairs))
-        progress.close()
-        logger.debug("_on_scan_done: progress.close() done (%.1fms)", (time.monotonic() - t0) * 1000)
-        thread.quit()
-        logger.debug("_on_scan_done: thread.quit() done (%.1fms)", (time.monotonic() - t0) * 1000)
+
+        if self._scan_progress_dlg:
+            self._scan_progress_dlg.close()
+            self._scan_progress_dlg = None
+        if self._scan_thread:
+            self._scan_thread.quit()
+            self._scan_thread = None
+
         if not pairs:
-            QMessageBox.information(self, "No photos", "No photos found in selected folder(s).")
+            QMessageBox.information(self, "无照片", "所选文件夹中未找到照片。")
             return
-        logger.debug("_on_scan_done: calling session.load() (%.1fms)", (time.monotonic() - t0) * 1000)
-        self._session.load(pairs, folders, start_index=start_index)
-        logger.debug("_on_scan_done: session.load() done (%.1fms)", (time.monotonic() - t0) * 1000)
-        repository.save_session(folders, start_index)
+
+        logger.debug("_on_scan_done: calling session.load (%.1fms)", (time.monotonic() - t0) * 1000)
+        self._session.load(pairs, self._scan_folders, start_index=self._scan_start_index)
+        repository.save_session(self._scan_folders, self._scan_start_index)
         logger.debug("_on_scan_done EXIT (%.1fms)", (time.monotonic() - t0) * 1000)
 
     def _on_scan_progress(self, current: int, total: int) -> None:
         logger.debug("_on_scan_progress %d/%d thread=%d", current, total, threading.get_ident())
-        if hasattr(self, '_scan_progress_dialog') and self._scan_progress_dialog:
-            self._scan_progress_dialog.setMaximum(total)
-            self._scan_progress_dialog.setValue(current)
-            logger.debug("_on_scan_progress: dialog updated")
+        if self._scan_progress_dlg:
+            self._scan_progress_dlg.setMaximum(total)
+            self._scan_progress_dlg.setValue(current)
+
+    # ------------------------------------------------------------------
+    # Folder key actions
+    # ------------------------------------------------------------------
 
     def _apply_folder_key(self, key: int) -> None:
         ok = self._mark_service.apply_folder_key(key)
         if not ok:
-            # Key not bound — offer to bind it
             reply = QMessageBox.question(
-                self, f"Key [{key}] not bound",
-                f"Key [{key}] has no folder assigned. Assign one now?",
+                self, f"键 [{key}] 未绑定",
+                f"键 [{key}] 尚未绑定文件夹，是否现在绑定？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.Yes:
@@ -266,8 +274,7 @@ class MainWindow(QMainWindow):
                 repository.save_binding(key, path)
             else:
                 repository.delete_binding(key)
-            per_key = self._compute_per_key()
-            self._sidebar.bindings.refresh(per_key)
+            self._sidebar.bindings.refresh(self._compute_per_key())
             self._sidebar.stats.update(*self._compute_stats())
 
     def _edit_default_folder(self) -> None:
@@ -285,26 +292,27 @@ class MainWindow(QMainWindow):
         repository.clear_default_keep_folder()
         self._sidebar.bindings.refresh_default(path="")
 
+    # ------------------------------------------------------------------
+    # Move
+    # ------------------------------------------------------------------
+
     def _move_photos(self) -> None:
         pairs = self._session.pairs
         marked = [p for p in pairs if p.mark_type != MarkType.NONE]
         if not marked:
-            QMessageBox.information(self, "Nothing to move", "No photos are marked.")
+            QMessageBox.information(self, "无需移动", "没有已标记的照片。")
             return
 
         pending, unresolved = resolve_moves(marked)
         needs_keep_folder = len(unresolved) > 0
 
-        # Build summary text
         lines = [f"已标记: {len(marked)} 张"]
         if pending:
             lines.append(f"  · {len(pending)} 张将移动到绑定文件夹")
         if unresolved:
             lines.append(f"  · {len(unresolved)} 张标记为 KEEP，需要指定目标文件夹")
 
-        # Pre-fill stored default keep folder
         stored_default = repository.get_default_keep_folder()
-
         dlg = MoveConfirmDialog(
             move_summary="\n".join(lines),
             keep_folder=stored_default,
@@ -315,57 +323,62 @@ class MainWindow(QMainWindow):
             return
 
         keep_folder = dlg.keep_folder if needs_keep_folder else None
-
-        # Persist the chosen keep folder for next time
         if keep_folder and keep_folder != stored_default:
             repository.save_default_keep_folder(keep_folder)
             self._sidebar.bindings.refresh_default()
 
         if unresolved and keep_folder:
-            extra_pending, _ = resolve_moves(unresolved, default_keep_folder=keep_folder)
-            pending.extend(extra_pending)
+            extra, _ = resolve_moves(unresolved, default_keep_folder=keep_folder)
+            pending.extend(extra)
 
         if not pending:
-            QMessageBox.information(self, "Nothing to move", "No photos to move after resolving destinations.")
+            QMessageBox.information(self, "无需移动", "解析目标后没有可移动的照片。")
             return
 
-        # Execute in background
-        progress = QProgressDialog("Moving photos…", None, 0, len(pending), self)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.show()
+        dlg2 = QProgressDialog("正在移动照片…", None, 0, len(pending), self)
+        dlg2.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg2.setMinimumDuration(0)
+        dlg2.show()
+        self._move_progress_dlg = dlg2
 
-        move_worker = _MoveWorker(pending)
+        worker = _MoveWorker(pending)
+        self._move_worker = worker   # keep reference
         thread = QThread(self)
-        move_worker.moveToThread(thread)
-        move_worker.finished.connect(
-            lambda r: self._on_move_done(r, progress, thread),
-            Qt.ConnectionType.QueuedConnection,
-        )
-        move_worker.progress.connect(
-            lambda cur, _: progress.setValue(cur),
-            Qt.ConnectionType.QueuedConnection,
-        )
-        thread.started.connect(move_worker.run)
+        worker.moveToThread(thread)
+
+        # Real method connections — AutoConnection → QueuedConnection across threads
+        worker.finished.connect(self._on_move_done)
+        worker.progress.connect(self._on_move_progress)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+
         thread.start()
         self._move_thread = thread
 
-    def _on_move_done(self, result: MoveResult, progress, thread) -> None:
-        progress.close()
-        thread.quit()
-        thread.wait()
+    def _on_move_done(self, result: MoveResult) -> None:
+        logger.debug("_on_move_done ENTER thread=%d moved=%d", threading.get_ident(), result.moved)
+        if self._move_progress_dlg:
+            self._move_progress_dlg.close()
+            self._move_progress_dlg = None
+        if self._move_thread:
+            self._move_thread.quit()
+            self._move_thread = None
 
-        msg = f"Moved: {result.moved} file(s)"
+        msg = f"已移动: {result.moved} 个文件"
         if result.skipped:
-            msg += f"\nSkipped: {result.skipped}"
+            msg += f"\n跳过: {result.skipped}"
         if result.errors:
-            msg += "\n\nErrors:\n" + "\n".join(result.errors[:10])
-            QMessageBox.warning(self, "Move complete (with errors)", msg)
+            msg += "\n\n错误:\n" + "\n".join(result.errors[:10])
+            QMessageBox.warning(self, "移动完成（有错误）", msg)
         else:
-            QMessageBox.information(self, "Move complete", msg)
+            QMessageBox.information(self, "移动完成", msg)
+
+    def _on_move_progress(self, current: int, total: int) -> None:
+        if self._move_progress_dlg:
+            self._move_progress_dlg.setValue(current)
 
     # ------------------------------------------------------------------
-    # Session change handler
+    # Session change handler (always called on main thread via on_change callback)
     # ------------------------------------------------------------------
 
     def _on_session_change(self, index: int) -> None:
@@ -373,36 +386,26 @@ class MainWindow(QMainWindow):
         logger.debug("_on_session_change ENTER index=%d thread=%d", index, threading.get_ident())
         pair = self._session.current
 
-        logger.debug("_on_session_change: calling viewer.display (%.1fms)", (time.monotonic() - t0) * 1000)
         self._viewer.display(pair)
-        logger.debug("_on_session_change: viewer.display done (%.1fms)", (time.monotonic() - t0) * 1000)
         self._viewer.refresh_mark()
+        logger.debug("_on_session_change: viewer updated (%.1fms)", (time.monotonic() - t0) * 1000)
 
-        # Status bar — current mark info
         total = self._session.total
-        mark_info = self._mark_label(pair)
-        self._status.update_status(index, total, mark_info)
-        logger.debug("_on_session_change: status updated (%.1fms)", (time.monotonic() - t0) * 1000)
+        self._status.update_status(index, total, self._mark_label(pair))
 
-        # Stats + bindings (cheap: iterate pairs in memory)
         total_n, marked_n, keep_n, per_key = self._compute_stats()
-        logger.debug("_on_session_change: stats computed (%.1fms)", (time.monotonic() - t0) * 1000)
         self._sidebar.stats.update(total_n, marked_n, keep_n, per_key)
         self._sidebar.bindings.refresh(per_key)
         logger.debug("_on_session_change: sidebar updated (%.1fms)", (time.monotonic() - t0) * 1000)
 
-        # EXIF — only reload when photo changes, not on every mark toggle
         if pair is not None and pair.pair_id != self._last_exif_pair_id:
             self._last_exif_pair_id = pair.pair_id
             self._load_exif_async(pair)
-            logger.debug("_on_session_change: exif async started (%.1fms)", (time.monotonic() - t0) * 1000)
 
         if pair is None:
             self._sidebar.exif.update(None)
             self._last_exif_pair_id = None
 
-        # Persist position
-        logger.debug("_on_session_change: calling save_state (%.1fms)", (time.monotonic() - t0) * 1000)
         self._session.save_state()
         logger.debug("_on_session_change EXIT (%.1fms)", (time.monotonic() - t0) * 1000)
 
@@ -417,7 +420,6 @@ class MainWindow(QMainWindow):
         return f"→ [{pair.folder_key}] {dest}"
 
     def _compute_stats(self) -> tuple[int, int, int, dict[int, int]]:
-        """Return (total, marked, keep_count, per_key_counts)."""
         pairs = self._session.pairs
         total = len(pairs)
         marked = sum(1 for p in pairs if p.mark_type != MarkType.NONE)
@@ -431,27 +433,28 @@ class MainWindow(QMainWindow):
     def _compute_per_key(self) -> dict[int, int]:
         return self._compute_stats()[3]
 
+    # ------------------------------------------------------------------
+    # EXIF async load
+    # ------------------------------------------------------------------
+
     def _load_exif_async(self, pair: PhotoPair) -> None:
-        """Read EXIF in a background thread so navigation stays responsive."""
-        # Cancel previous if still running
         if self._exif_thread and self._exif_thread.isRunning():
             self._exif_thread.quit()
             self._exif_thread.wait(50)
 
-        target_path = pair.jpg_path or pair.raw_path
-        target_id = pair.pair_id
-
-        worker = _ExifWorker(target_path, target_id)
+        worker = _ExifWorker(pair.jpg_path or pair.raw_path, pair.pair_id)
+        self._exif_worker = worker   # keep reference
         thread = QThread(self)
         worker.moveToThread(thread)
-        worker.finished.connect(self._on_exif_loaded)
+        worker.finished.connect(self._on_exif_loaded)   # AutoConnection → main thread
         thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         self._exif_thread = thread
         thread.start()
 
     def _on_exif_loaded(self, info: ExifInfo, pair_id: str) -> None:
-        # Discard if user has already navigated away
+        logger.debug("_on_exif_loaded pair_id=%s thread=%d", pair_id, threading.get_ident())
         if pair_id == self._last_exif_pair_id:
             self._sidebar.exif.update(info)
 

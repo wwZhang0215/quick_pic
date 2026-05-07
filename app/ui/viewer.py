@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal, QObject
 from PySide6.QtGui import QPixmap, QColor, QPainter, QFont
@@ -16,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class _ImageLoader(QObject):
-    """Worker object that loads image bytes in a background thread."""
+    """Loads image bytes in a background thread."""
     loaded = Signal(bytes, str)   # (image_bytes, pair_id)
     failed = Signal(str)          # pair_id
 
@@ -26,40 +25,36 @@ class _ImageLoader(QObject):
 
     def run(self) -> None:
         t0 = time.monotonic()
-        logger.debug("_ImageLoader.run START path=%s thread=%d", self._pair.display_path, threading.get_ident())
+        tid = threading.get_ident()
+        logger.debug("_ImageLoader.run START path=%s thread=%d", self._pair.display_path, tid)
         data = get_display_bytes(self._pair.display_path)
-        logger.debug("_ImageLoader.run: get_display_bytes done %s bytes (%.1fms)", len(data) if data else 0, (time.monotonic() - t0) * 1000)
+        elapsed = (time.monotonic() - t0) * 1000
+        logger.debug("_ImageLoader.run DONE %d bytes (%.1fms) thread=%d", len(data) if data else 0, elapsed, tid)
         if data:
             self.loaded.emit(data, self._pair.pair_id)
         else:
             self.failed.emit(self._pair.pair_id)
-        logger.debug("_ImageLoader.run EXIT (%.1fms)", (time.monotonic() - t0) * 1000)
 
 
-# Mark colour overlay per status
 _MARK_COLORS: dict[MarkType, QColor | None] = {
     MarkType.NONE: None,
     MarkType.KEEP: QColor(0, 200, 100, 60),
     MarkType.FOLDER_KEY: QColor(60, 120, 255, 60),
 }
 
-_MARK_LABELS: dict[MarkType, str] = {
-    MarkType.NONE: "",
-    MarkType.KEEP: "KEEP",
-    MarkType.FOLDER_KEY: "",  # filled dynamically
-}
-
 
 class PhotoViewer(QWidget):
     """
-    Widget that displays the current photo with a mark overlay.
-    Image loading runs in a background thread to keep the UI responsive.
+    Displays the current photo with a mark overlay.
+    Image loading runs in a background thread; results arrive via Qt signals
+    using AutoConnection so they are always dispatched to the main thread.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._current_pair: PhotoPair | None = None
         self._pending_pair_id: str | None = None
+        self._raw_pixmap: QPixmap | None = None
 
         self._label = QLabel(self)
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -70,15 +65,18 @@ class PhotoViewer(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._label)
 
-        self._raw_pixmap: QPixmap | None = None
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def display(self, pair: PhotoPair | None) -> None:
         """Start loading and displaying the given photo pair."""
         if pair is self._current_pair:
-            logger.debug("viewer.display: same pair, skipping")
             return
 
-        logger.debug("viewer.display ENTER pair=%s thread=%d", pair.pair_id if pair else None, threading.get_ident())
+        tid = threading.get_ident()
+        logger.debug("viewer.display ENTER pair=%s thread=%d", pair.pair_id if pair else None, tid)
+
         self._current_pair = pair
         self._raw_pixmap = None
 
@@ -90,40 +88,44 @@ class PhotoViewer(QWidget):
         self._label.setText("Loading…")
         self._pending_pair_id = pair.pair_id
 
-        logger.debug("viewer.display: starting image loader thread")
+        # Start background loader.
+        # _on_loaded / _on_failed are real methods on self (a QObject in the main
+        # thread), so Qt AutoConnection will deliver the signals via the event loop
+        # — never via DirectConnection — regardless of which thread the loader runs in.
         loader = _ImageLoader(pair)
         thread = QThread(self)
         loader.moveToThread(thread)
-        loader.loaded.connect(self._on_loaded)
-        loader.failed.connect(self._on_failed)
+        loader.loaded.connect(self._on_loaded)    # AutoConnection → main thread
+        loader.failed.connect(self._on_failed)    # AutoConnection → main thread
         thread.started.connect(loader.run)
         thread.finished.connect(loader.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.start()
-        logger.debug("viewer.display EXIT (loader thread started)")
+        logger.debug("viewer.display: loader thread started, thread=%d", tid)
 
     def refresh_mark(self) -> None:
-        """Re-render the overlay when the mark state changes without reloading."""
+        """Re-render the overlay when mark state changes without reloading the image."""
         self._update_display()
 
     # ------------------------------------------------------------------
-    # Internal
+    # Slots (always called on main thread via AutoConnection)
     # ------------------------------------------------------------------
 
     def _on_loaded(self, data: bytes, pair_id: str) -> None:
-        logger.debug("viewer._on_loaded pair_id=%s pending=%s thread=%d", pair_id, self._pending_pair_id, threading.get_ident())
+        tid = threading.get_ident()
+        logger.debug("viewer._on_loaded pair_id=%s pending=%s thread=%d", pair_id, self._pending_pair_id, tid)
         if pair_id != self._pending_pair_id:
-            logger.debug("viewer._on_loaded: stale, discarding")
-            return  # stale load
+            logger.debug("viewer._on_loaded: stale result, discarding")
+            return
         t0 = time.monotonic()
         pixmap = QPixmap()
         pixmap.loadFromData(data)
-        logger.debug("viewer._on_loaded: QPixmap.loadFromData done (%.1fms)", (time.monotonic() - t0) * 1000)
+        logger.debug("viewer._on_loaded: QPixmap loaded (%.1fms)", (time.monotonic() - t0) * 1000)
         self._raw_pixmap = pixmap
         self._update_display()
-        logger.debug("viewer._on_loaded: _update_display done (%.1fms)", (time.monotonic() - t0) * 1000)
 
     def _on_failed(self, pair_id: str) -> None:
+        logger.debug("viewer._on_failed pair_id=%s thread=%d", pair_id, threading.get_ident())
         if pair_id != self._pending_pair_id:
             return
         self._label.setText("Cannot display image")
@@ -132,7 +134,6 @@ class PhotoViewer(QWidget):
         if self._raw_pixmap is None or self._raw_pixmap.isNull():
             return
 
-        # Scale to fit label
         scaled = self._raw_pixmap.scaled(
             self._label.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
@@ -144,14 +145,12 @@ class PhotoViewer(QWidget):
             self._label.setPixmap(scaled)
             return
 
-        # Draw colour overlay and label
         result = QPixmap(scaled)
         painter = QPainter(result)
         overlay_color = _MARK_COLORS.get(pair.mark_type)
         if overlay_color:
             painter.fillRect(result.rect(), overlay_color)
 
-        # Top-right badge
         if pair.mark_type == MarkType.KEEP:
             badge_text = "KEEP"
         elif pair.mark_type == MarkType.FOLDER_KEY:
@@ -165,9 +164,11 @@ class PhotoViewer(QWidget):
             font.setPointSize(14)
             painter.setFont(font)
             painter.setPen(QColor(255, 255, 255))
-            painter.drawText(result.rect().adjusted(0, 10, -10, 0),
-                             Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight,
-                             badge_text)
+            painter.drawText(
+                result.rect().adjusted(0, 10, -10, 0),
+                Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight,
+                badge_text,
+            )
         painter.end()
         self._label.setPixmap(result)
 
