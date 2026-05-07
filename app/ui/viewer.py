@@ -111,6 +111,12 @@ class PhotoViewer(QWidget):
         """Re-render the overlay when mark state changes without reloading the image."""
         self._update_display()
 
+    def stop_loading(self) -> None:
+        """Stop any in-flight image loader thread. Call before widget destruction."""
+        if self._loader_thread and self._loader_thread.isRunning():
+            self._loader_thread.quit()
+            self._loader_thread.wait(2000)
+
     # ------------------------------------------------------------------
     # Slots (always called on main thread via AutoConnection)
     # ------------------------------------------------------------------

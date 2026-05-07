@@ -468,4 +468,12 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._session.save_state()
+        self._stop_threads()
         super().closeEvent(event)
+
+    def _stop_threads(self) -> None:
+        self._viewer.stop_loading()
+        for thread in (self._scan_thread, self._move_thread, self._exif_thread):
+            if thread and thread.isRunning():
+                thread.quit()
+                thread.wait(2000)
