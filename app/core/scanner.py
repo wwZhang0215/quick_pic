@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -30,6 +31,10 @@ def scan_folders(
     Returns:
         List of PhotoPair objects sorted by (folder, stem).
     """
+    t0 = time.monotonic()
+    tid = threading.get_ident()
+    logger.debug("SCAN START thread=%d folders=%s", tid, folder_paths)
+
     # Step 1: Collect all image files
     groups: dict[tuple[str, str], dict[str, str]] = defaultdict(dict)
 
@@ -46,6 +51,8 @@ def scan_folders(
             if suffix in JPG_EXTENSIONS or suffix in RAW_EXTENSIONS:
                 all_files.append(f)
 
+    logger.debug("SCAN step1 done: %d files found (%.1fms)", len(all_files), (time.monotonic() - t0) * 1000)
+
     # Step 2: Group by (folder, stem)
     for f in all_files:
         suffix = f.suffix.lower()
@@ -55,6 +62,8 @@ def scan_folders(
             groups[key]["jpg"] = str(f)
         elif suffix in RAW_EXTENSIONS:
             groups[key]["raw"] = str(f)
+
+    logger.debug("SCAN step2 done: %d pairs grouped (%.1fms)", len(groups), (time.monotonic() - t0) * 1000)
 
     # Step 3: Build PhotoPair objects (no EXIF reads)
     pairs: list[PhotoPair] = []
@@ -72,10 +81,13 @@ def scan_folders(
         if progress_callback is not None:
             now = time.monotonic()
             if now - _last_progress >= 0.05 or i == total - 1:
+                logger.debug("SCAN progress %d/%d (%.1fms)", i + 1, total, (now - t0) * 1000)
                 progress_callback(i + 1, total)
                 _last_progress = now
 
+    logger.debug("SCAN step3 done: pairs built (%.1fms)", (time.monotonic() - t0) * 1000)
+
     # Step 4: Sort by folder then filename stem
     pairs.sort(key=lambda p: (p.folder, p.stem))
-    logger.info("Scanned %d folders, found %d photo pairs", len(folder_paths), len(pairs))
+    logger.info("SCAN DONE: %d folders, %d pairs, total %.1fms", len(folder_paths), len(pairs), (time.monotonic() - t0) * 1000)
     return pairs

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal, QObject
@@ -33,8 +35,11 @@ class _ScanWorker(QObject):
         self._folders = folders
 
     def run(self) -> None:
+        logger.debug("_ScanWorker.run START thread=%d", threading.get_ident())
         pairs = scan_folders(self._folders, progress_callback=self.progress.emit)
+        logger.debug("_ScanWorker.run DONE %d pairs, emitting finished thread=%d", len(pairs), threading.get_ident())
         self.finished.emit(pairs)
+        logger.debug("_ScanWorker.run finished.emit returned thread=%d", threading.get_ident())
 
 
 class _ExifWorker(QObject):
@@ -193,11 +198,13 @@ class MainWindow(QMainWindow):
         self._start_scan(folders)
 
     def _start_scan(self, folders: list[str], start_index: int = 0) -> None:
+        logger.debug("_start_scan called thread=%d folders=%s", threading.get_ident(), folders)
         self._scan_progress_dialog = QProgressDialog("正在扫描照片…", None, 0, 0, self)
         self._scan_progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self._scan_progress_dialog.setMinimumDuration(0)
         self._scan_progress_dialog.setValue(0)
         self._scan_progress_dialog.show()
+        logger.debug("_start_scan: progress dialog shown")
 
         self._scan_worker = _ScanWorker(folders)   # keep reference
         thread = QThread(self)
@@ -208,22 +215,33 @@ class MainWindow(QMainWindow):
         self._scan_worker.progress.connect(self._on_scan_progress)
         thread.started.connect(self._scan_worker.run)
         thread.finished.connect(self._scan_worker.deleteLater)
+        logger.debug("_start_scan: starting thread")
         thread.start()
         self._scan_thread = thread
+        logger.debug("_start_scan: thread.start() returned (thread is running in background)")
 
     def _on_scan_done(self, pairs, folders, start_index, progress, thread) -> None:
+        t0 = time.monotonic()
+        logger.debug("_on_scan_done ENTER thread=%d pairs=%d", threading.get_ident(), len(pairs))
         progress.close()
+        logger.debug("_on_scan_done: progress.close() done (%.1fms)", (time.monotonic() - t0) * 1000)
         thread.quit()
+        logger.debug("_on_scan_done: thread.quit() done (%.1fms)", (time.monotonic() - t0) * 1000)
         if not pairs:
             QMessageBox.information(self, "No photos", "No photos found in selected folder(s).")
             return
+        logger.debug("_on_scan_done: calling session.load() (%.1fms)", (time.monotonic() - t0) * 1000)
         self._session.load(pairs, folders, start_index=start_index)
+        logger.debug("_on_scan_done: session.load() done (%.1fms)", (time.monotonic() - t0) * 1000)
         repository.save_session(folders, start_index)
+        logger.debug("_on_scan_done EXIT (%.1fms)", (time.monotonic() - t0) * 1000)
 
     def _on_scan_progress(self, current: int, total: int) -> None:
+        logger.debug("_on_scan_progress %d/%d thread=%d", current, total, threading.get_ident())
         if hasattr(self, '_scan_progress_dialog') and self._scan_progress_dialog:
             self._scan_progress_dialog.setMaximum(total)
             self._scan_progress_dialog.setValue(current)
+            logger.debug("_on_scan_progress: dialog updated")
 
     def _apply_folder_key(self, key: int) -> None:
         ok = self._mark_service.apply_folder_key(key)
@@ -344,31 +362,42 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_session_change(self, index: int) -> None:
+        t0 = time.monotonic()
+        logger.debug("_on_session_change ENTER index=%d thread=%d", index, threading.get_ident())
         pair = self._session.current
+
+        logger.debug("_on_session_change: calling viewer.display (%.1fms)", (time.monotonic() - t0) * 1000)
         self._viewer.display(pair)
+        logger.debug("_on_session_change: viewer.display done (%.1fms)", (time.monotonic() - t0) * 1000)
         self._viewer.refresh_mark()
 
         # Status bar — current mark info
         total = self._session.total
         mark_info = self._mark_label(pair)
         self._status.update_status(index, total, mark_info)
+        logger.debug("_on_session_change: status updated (%.1fms)", (time.monotonic() - t0) * 1000)
 
         # Stats + bindings (cheap: iterate pairs in memory)
         total_n, marked_n, keep_n, per_key = self._compute_stats()
+        logger.debug("_on_session_change: stats computed (%.1fms)", (time.monotonic() - t0) * 1000)
         self._sidebar.stats.update(total_n, marked_n, keep_n, per_key)
         self._sidebar.bindings.refresh(per_key)
+        logger.debug("_on_session_change: sidebar updated (%.1fms)", (time.monotonic() - t0) * 1000)
 
         # EXIF — only reload when photo changes, not on every mark toggle
         if pair is not None and pair.pair_id != self._last_exif_pair_id:
             self._last_exif_pair_id = pair.pair_id
             self._load_exif_async(pair)
+            logger.debug("_on_session_change: exif async started (%.1fms)", (time.monotonic() - t0) * 1000)
 
         if pair is None:
             self._sidebar.exif.update(None)
             self._last_exif_pair_id = None
 
         # Persist position
+        logger.debug("_on_session_change: calling save_state (%.1fms)", (time.monotonic() - t0) * 1000)
         self._session.save_state()
+        logger.debug("_on_session_change EXIT (%.1fms)", (time.monotonic() - t0) * 1000)
 
     def _mark_label(self, pair: PhotoPair | None) -> str:
         if pair is None or pair.mark_type == MarkType.NONE:

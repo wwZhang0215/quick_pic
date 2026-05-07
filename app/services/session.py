@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from typing import Callable
 
 from app.core.models import MarkType, PhotoPair
@@ -28,11 +30,16 @@ class PhotoSession:
 
     def load(self, pairs: list[PhotoPair], source_folders: list[str], start_index: int = 0) -> None:
         """Replace the current photo list and restore saved marks."""
+        t0 = time.monotonic()
+        logger.debug("session.load ENTER: %d pairs thread=%d", len(pairs), threading.get_ident())
         self._pairs = pairs
         self._source_folders = source_folders
         self._index = max(0, min(start_index, len(pairs) - 1)) if pairs else 0
+        logger.debug("session.load: calling _apply_saved_marks (%.1fms)", (time.monotonic() - t0) * 1000)
         self._apply_saved_marks()
+        logger.debug("session.load: _apply_saved_marks done, calling _notify (%.1fms)", (time.monotonic() - t0) * 1000)
         self._notify()
+        logger.debug("session.load EXIT (%.1fms)", (time.monotonic() - t0) * 1000)
 
     def _apply_saved_marks(self) -> None:
         """Load all persisted marks from DB and apply them to pairs in memory."""

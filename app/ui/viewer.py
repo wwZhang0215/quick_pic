@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal, QObject
@@ -23,11 +25,15 @@ class _ImageLoader(QObject):
         self._pair = pair
 
     def run(self) -> None:
+        t0 = time.monotonic()
+        logger.debug("_ImageLoader.run START path=%s thread=%d", self._pair.display_path, threading.get_ident())
         data = get_display_bytes(self._pair.display_path)
+        logger.debug("_ImageLoader.run: get_display_bytes done %s bytes (%.1fms)", len(data) if data else 0, (time.monotonic() - t0) * 1000)
         if data:
             self.loaded.emit(data, self._pair.pair_id)
         else:
             self.failed.emit(self._pair.pair_id)
+        logger.debug("_ImageLoader.run EXIT (%.1fms)", (time.monotonic() - t0) * 1000)
 
 
 # Mark colour overlay per status
@@ -69,8 +75,10 @@ class PhotoViewer(QWidget):
     def display(self, pair: PhotoPair | None) -> None:
         """Start loading and displaying the given photo pair."""
         if pair is self._current_pair:
+            logger.debug("viewer.display: same pair, skipping")
             return
 
+        logger.debug("viewer.display ENTER pair=%s thread=%d", pair.pair_id if pair else None, threading.get_ident())
         self._current_pair = pair
         self._raw_pixmap = None
 
@@ -82,6 +90,7 @@ class PhotoViewer(QWidget):
         self._label.setText("Loading…")
         self._pending_pair_id = pair.pair_id
 
+        logger.debug("viewer.display: starting image loader thread")
         loader = _ImageLoader(pair)
         thread = QThread(self)
         loader.moveToThread(thread)
@@ -91,6 +100,7 @@ class PhotoViewer(QWidget):
         thread.finished.connect(loader.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.start()
+        logger.debug("viewer.display EXIT (loader thread started)")
 
     def refresh_mark(self) -> None:
         """Re-render the overlay when the mark state changes without reloading."""
@@ -101,12 +111,17 @@ class PhotoViewer(QWidget):
     # ------------------------------------------------------------------
 
     def _on_loaded(self, data: bytes, pair_id: str) -> None:
+        logger.debug("viewer._on_loaded pair_id=%s pending=%s thread=%d", pair_id, self._pending_pair_id, threading.get_ident())
         if pair_id != self._pending_pair_id:
+            logger.debug("viewer._on_loaded: stale, discarding")
             return  # stale load
+        t0 = time.monotonic()
         pixmap = QPixmap()
         pixmap.loadFromData(data)
+        logger.debug("viewer._on_loaded: QPixmap.loadFromData done (%.1fms)", (time.monotonic() - t0) * 1000)
         self._raw_pixmap = pixmap
         self._update_display()
+        logger.debug("viewer._on_loaded: _update_display done (%.1fms)", (time.monotonic() - t0) * 1000)
 
     def _on_failed(self, pair_id: str) -> None:
         if pair_id != self._pending_pair_id:
