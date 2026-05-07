@@ -222,13 +222,9 @@ class MainWindow(QMainWindow):
         repository.save_session(folders, start_index)
 
     def _on_scan_progress(self, current: int, total: int) -> None:
-        """Update progress dialog during scan."""
         if hasattr(self, '_scan_progress_dialog') and self._scan_progress_dialog:
             self._scan_progress_dialog.setMaximum(total)
             self._scan_progress_dialog.setValue(current)
-            return
-        self._session.load(pairs, folders, start_index=start_index)
-        repository.save_session(folders, start_index)
 
     def _apply_folder_key(self, key: int) -> None:
         ok = self._mark_service.apply_folder_key(key)
