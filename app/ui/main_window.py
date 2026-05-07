@@ -193,21 +193,19 @@ class MainWindow(QMainWindow):
         self._start_scan(folders)
 
     def _start_scan(self, folders: list[str], start_index: int = 0) -> None:
-        progress = QProgressDialog("正在扫描照片…", None, 0, 0, self)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setValue(0)
-        progress.show()
+        self._scan_progress_dialog = QProgressDialog("正在扫描照片…", None, 0, 0, self)
+        self._scan_progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self._scan_progress_dialog.setMinimumDuration(0)
+        self._scan_progress_dialog.setValue(0)
+        self._scan_progress_dialog.show()
 
         self._scan_worker = _ScanWorker(folders)   # keep reference
         thread = QThread(self)
         self._scan_worker.moveToThread(thread)
         self._scan_worker.finished.connect(
-            lambda pairs: self._on_scan_done(pairs, folders, start_index, progress, thread)
+            lambda pairs: self._on_scan_done(pairs, folders, start_index, self._scan_progress_dialog, thread)
         )
-        self._scan_worker.progress.connect(
-            lambda cur, tot: (progress.setMaximum(tot), progress.setValue(cur))
-        )
+        self._scan_worker.progress.connect(self._on_scan_progress)
         thread.started.connect(self._scan_worker.run)
         thread.finished.connect(self._scan_worker.deleteLater)
         thread.start()
@@ -219,6 +217,15 @@ class MainWindow(QMainWindow):
         thread.wait()
         if not pairs:
             QMessageBox.information(self, "No photos", "No photos found in selected folder(s).")
+            return
+        self._session.load(pairs, folders, start_index=start_index)
+        repository.save_session(folders, start_index)
+
+    def _on_scan_progress(self, current: int, total: int) -> None:
+        """Update progress dialog during scan."""
+        if hasattr(self, '_scan_progress_dialog') and self._scan_progress_dialog:
+            self._scan_progress_dialog.setMaximum(total)
+            self._scan_progress_dialog.setValue(current)
             return
         self._session.load(pairs, folders, start_index=start_index)
         repository.save_session(folders, start_index)
