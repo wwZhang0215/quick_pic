@@ -55,6 +55,8 @@ class PhotoViewer(QWidget):
         self._current_pair: PhotoPair | None = None
         self._pending_pair_id: str | None = None
         self._raw_pixmap: QPixmap | None = None
+        self._loader: _ImageLoader | None = None   # strong ref prevents GC
+        self._loader_thread: QThread | None = None
 
         self._label = QLabel(self)
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -88,10 +90,10 @@ class PhotoViewer(QWidget):
         self._label.setText("Loading…")
         self._pending_pair_id = pair.pair_id
 
-        # Start background loader.
-        # _on_loaded / _on_failed are real methods on self (a QObject in the main
-        # thread), so Qt AutoConnection will deliver the signals via the event loop
-        # — never via DirectConnection — regardless of which thread the loader runs in.
+        # Keep strong references so neither loader nor thread are GC'd before the
+        # signal fires. Without self._loader the loader object is immediately
+        # eligible for collection, causing the loaded signal to never arrive (or
+        # worse, crashing the worker thread when it tries to emit).
         loader = _ImageLoader(pair)
         thread = QThread(self)
         loader.moveToThread(thread)
@@ -100,6 +102,8 @@ class PhotoViewer(QWidget):
         thread.started.connect(loader.run)
         thread.finished.connect(loader.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        self._loader = loader
+        self._loader_thread = thread
         thread.start()
         logger.debug("viewer.display: loader thread started, thread=%d", tid)
 
