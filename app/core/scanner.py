@@ -5,7 +5,6 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Callable
 
-from app.core.exif_reader import read_capture_date
 from app.core.models import PhotoPair
 from app.core.thumbnail import JPG_EXTENSIONS, RAW_EXTENSIONS
 
@@ -18,17 +17,19 @@ def scan_folders(
 ) -> list[PhotoPair]:
     """
     Scan one or more folders for photos, pair JPG+RAW by filename stem,
-    read EXIF capture dates, and return a list sorted by capture date.
+    and return a list sorted by filename.
+
+    EXIF capture dates are NOT read here — they are loaded lazily when a photo
+    is displayed. This keeps scanning fast regardless of RAW file count.
 
     Args:
         folder_paths: List of absolute folder paths to scan (non-recursive).
         progress_callback: Optional callback(current, total) for progress updates.
 
     Returns:
-        Sorted list of PhotoPair objects.
+        List of PhotoPair objects sorted by (folder, stem).
     """
     # Step 1: Collect all image files
-    # key: (folder, stem) -> {'jpg': path, 'raw': path}
     groups: dict[tuple[str, str], dict[str, str]] = defaultdict(dict)
 
     all_files: list[Path] = []
@@ -48,40 +49,28 @@ def scan_folders(
     for f in all_files:
         suffix = f.suffix.lower()
         folder_str = str(f.parent)
-        stem = f.stem
-        key = (folder_str, stem)
+        key = (folder_str, f.stem)
         if suffix in JPG_EXTENSIONS:
             groups[key]["jpg"] = str(f)
         elif suffix in RAW_EXTENSIONS:
             groups[key]["raw"] = str(f)
 
-    # Step 3: Build PhotoPair objects and read EXIF
+    # Step 3: Build PhotoPair objects (no EXIF reads)
     pairs: list[PhotoPair] = []
     total = len(groups)
     for i, ((folder, stem), paths) in enumerate(groups.items()):
-        jpg_path = paths.get("jpg")
-        raw_path = paths.get("raw")
-
-        # Read EXIF from JPG first (faster), fall back to RAW
-        capture_date = None
-        if jpg_path:
-            capture_date = read_capture_date(jpg_path)
-        if capture_date is None and raw_path:
-            capture_date = read_capture_date(raw_path)
-
         pair = PhotoPair(
             stem=stem,
             folder=folder,
-            jpg_path=jpg_path,
-            raw_path=raw_path,
-            capture_date=capture_date,
+            jpg_path=paths.get("jpg"),
+            raw_path=paths.get("raw"),
         )
         pairs.append(pair)
 
         if progress_callback is not None:
             progress_callback(i + 1, total)
 
-    # Step 4: Sort by capture date
-    pairs.sort(key=lambda p: p.sort_key())
+    # Step 4: Sort by folder then filename stem
+    pairs.sort(key=lambda p: (p.folder, p.stem))
     logger.info("Scanned %d folders, found %d photo pairs", len(folder_paths), len(pairs))
     return pairs

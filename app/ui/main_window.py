@@ -193,20 +193,25 @@ class MainWindow(QMainWindow):
         self._start_scan(folders)
 
     def _start_scan(self, folders: list[str], start_index: int = 0) -> None:
-        progress = QProgressDialog("Scanning photos…", None, 0, 0, self)
+        progress = QProgressDialog("正在扫描照片…", None, 0, 0, self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
         progress.show()
 
-        worker = _ScanWorker(folders)
+        self._scan_worker = _ScanWorker(folders)   # keep reference
         thread = QThread(self)
-        worker.moveToThread(thread)
-        worker.finished.connect(lambda pairs: self._on_scan_done(pairs, folders, start_index, progress, thread))
-        worker.progress.connect(lambda cur, tot: progress.setMaximum(tot) or progress.setValue(cur))
-        thread.started.connect(worker.run)
+        self._scan_worker.moveToThread(thread)
+        self._scan_worker.finished.connect(
+            lambda pairs: self._on_scan_done(pairs, folders, start_index, progress, thread)
+        )
+        self._scan_worker.progress.connect(
+            lambda cur, tot: (progress.setMaximum(tot), progress.setValue(cur))
+        )
+        thread.started.connect(self._scan_worker.run)
+        thread.finished.connect(self._scan_worker.deleteLater)
         thread.start()
-        self._scan_thread = thread  # keep reference
+        self._scan_thread = thread
 
     def _on_scan_done(self, pairs, folders, start_index, progress, thread) -> None:
         progress.close()
