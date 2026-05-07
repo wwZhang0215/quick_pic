@@ -1,0 +1,16 @@
+14:32:49.186 [MainThread/8380264704] app.db.repository INFO: Database initialised at /Users/xpeng/.quickpic/data.db
+qt.qpa.fonts: Populating font family aliases took 57 ms. Replace uses of missing font family "Monospace" with one that exists to avoid this cost. 
+14:32:56.890 [MainThread/8380264704] app.ui.main_window DEBUG: _start_scan called thread=8380264704 folders=['/Users/xpeng/Downloads/10660505']
+14:32:57.163 [MainThread/8380264704] app.ui.main_window DEBUG: _start_scan: progress dialog shown
+14:32:57.164 [MainThread/8380264704] app.ui.main_window DEBUG: _start_scan: starting thread
+14:32:57.164 [MainThread/8380264704] app.ui.main_window DEBUG: _start_scan: thread.start() returned (thread is running in background)
+14:32:57.164 [Dummy-1/6108131328] app.ui.main_window DEBUG: _ScanWorker.run START thread=6108131328
+14:32:57.164 [Dummy-1/6108131328] app.core.scanner DEBUG: SCAN START thread=6108131328 folders=['/Users/xpeng/Downloads/10660505']
+14:32:57.165 [Dummy-1/6108131328] app.core.scanner DEBUG: SCAN step1 done: 22 files found (0.6ms)
+14:32:57.165 [Dummy-1/6108131328] app.core.scanner DEBUG: SCAN step2 done: 11 pairs grouped (0.8ms)
+14:32:57.165 [Dummy-1/6108131328] app.core.scanner DEBUG: SCAN progress 1/11 (0.9ms)
+14:32:57.165 [Dummy-1/6108131328] app.core.scanner DEBUG: SCAN progress 11/11 (0.9ms)
+14:32:57.165 [Dummy-1/6108131328] app.core.scanner DEBUG: SCAN step3 done: pairs built (0.9ms)
+14:32:57.165 [Dummy-1/6108131328] app.core.scanner INFO: SCAN DONE: 1 folders, 11 pairs, total 1.0ms
+14:32:57.165 [Dummy-1/6108131328] app.ui.main_window DEBUG: _ScanWorker.run DONE 11 pairs, emitting finished thread=6108131328
+14:32:57.166 [Dummy-1/6108131328] app.ui.main_window DEBUG: _on_scan_done ENTER thread=6108131328 pairs=11

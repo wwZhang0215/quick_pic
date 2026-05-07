@@ -210,7 +210,8 @@ class MainWindow(QMainWindow):
         thread = QThread(self)
         self._scan_worker.moveToThread(thread)
         self._scan_worker.finished.connect(
-            lambda pairs: self._on_scan_done(pairs, folders, start_index, self._scan_progress_dialog, thread)
+            lambda pairs: self._on_scan_done(pairs, folders, start_index, self._scan_progress_dialog, thread),
+            Qt.ConnectionType.QueuedConnection,
         )
         self._scan_worker.progress.connect(self._on_scan_progress)
         thread.started.connect(self._scan_worker.run)
@@ -337,8 +338,14 @@ class MainWindow(QMainWindow):
         move_worker = _MoveWorker(pending)
         thread = QThread(self)
         move_worker.moveToThread(thread)
-        move_worker.finished.connect(lambda r: self._on_move_done(r, progress, thread))
-        move_worker.progress.connect(lambda cur, _: progress.setValue(cur))
+        move_worker.finished.connect(
+            lambda r: self._on_move_done(r, progress, thread),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        move_worker.progress.connect(
+            lambda cur, _: progress.setValue(cur),
+            Qt.ConnectionType.QueuedConnection,
+        )
         thread.started.connect(move_worker.run)
         thread.start()
         self._move_thread = thread
