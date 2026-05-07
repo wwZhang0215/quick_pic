@@ -17,10 +17,13 @@ class MoveResult:
     moved: int = 0
     skipped: int = 0
     errors: list[str] = None  # type: ignore[assignment]
+    moved_pair_ids: list[str] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.errors is None:
             self.errors = []
+        if self.moved_pair_ids is None:
+            self.moved_pair_ids = []
 
 
 @dataclass
@@ -95,6 +98,8 @@ def execute_moves(
                 raw_dest.mkdir(parents=True, exist_ok=True)
                 _move_file(pair.raw_path, raw_dest / Path(pair.raw_path).name)
                 result.moved += 1
+
+            result.moved_pair_ids.append(pair.pair_id)
 
         except Exception as exc:
             msg = f"Failed to move {pair.stem}: {exc}"

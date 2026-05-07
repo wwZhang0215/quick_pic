@@ -126,6 +126,16 @@ class PhotoSession:
     # Persistence helpers
     # ------------------------------------------------------------------
 
+    def remove_pairs(self, pair_ids: list[str]) -> None:
+        """Remove moved pairs from the in-memory list and clean up their DB marks."""
+        id_set = set(pair_ids)
+        for pair in self._pairs:
+            if pair.pair_id in id_set:
+                repository.delete_mark(pair.pair_id)
+        self._pairs = [p for p in self._pairs if p.pair_id not in id_set]
+        self._index = max(0, min(self._index, len(self._pairs) - 1))
+        self._notify()
+
     def save_state(self) -> None:
         """Persist current position to DB for session restore."""
         repository.save_session(self._source_folders, self._index)

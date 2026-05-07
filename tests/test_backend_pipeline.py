@@ -20,10 +20,13 @@ from app.services.session import PhotoSession
 # scan_folders
 # ---------------------------------------------------------------------------
 
+_EXPECTED_PAIRS = len(list(__import__('pathlib').Path("/Users/xpeng/Downloads/10660505").glob("*.JPG")))
+
+
 class TestScanFolders:
     def test_finds_all_pairs(self, tmp_photo_dir: Path) -> None:
         pairs = scan_folders([str(tmp_photo_dir)])
-        assert len(pairs) == 11  # 11 JPG+ARW pairs in test folder
+        assert len(pairs) == _EXPECTED_PAIRS
 
     def test_pairs_have_jpg_and_raw(self, tmp_photo_dir: Path) -> None:
         pairs = scan_folders([str(tmp_photo_dir)])
@@ -59,7 +62,7 @@ class TestScanFolders:
         second = tmp_path / "empty"
         second.mkdir()
         pairs = scan_folders([str(tmp_photo_dir), str(second)])
-        assert len(pairs) == 11
+        assert len(pairs) == _EXPECTED_PAIRS
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +74,7 @@ class TestPhotoSession:
         pairs = scan_folders([str(tmp_photo_dir)])
         session = PhotoSession()
         session.load(pairs, [str(tmp_photo_dir)])
-        assert session.total == 11
+        assert session.total == _EXPECTED_PAIRS
         assert session.index == 0
         assert session.current is not None
 
@@ -90,9 +93,9 @@ class TestPhotoSession:
         session.load(pairs, [str(tmp_photo_dir)])
         session.previous()
         assert session.index == 0  # clamp at 0
-        session.go_to(10)
+        session.go_to(_EXPECTED_PAIRS - 1)
         session.next()
-        assert session.index == 10  # clamp at max
+        assert session.index == _EXPECTED_PAIRS - 1  # clamp at max
 
     def test_on_change_called_on_load(self, tmp_photo_dir: Path, tmp_db: Path) -> None:
         pairs = scan_folders([str(tmp_photo_dir)])
@@ -203,6 +206,29 @@ class TestMarkOperations:
         result = svc.apply_folder_key(2)
         assert result is True
         assert session.current.mark_type == MarkType.FOLDER_KEY
+
+    def test_remove_pairs_clears_session_and_db(self, tmp_photo_dir: Path, tmp_db: Path) -> None:
+        session = self._make_session(tmp_photo_dir)
+        pair0 = session.pairs[0]
+        pair1 = session.pairs[1]
+        session.mark_keep()
+        session.go_to(1)
+        session.mark_keep()
+
+        assert repository.get_all_marks().get(pair0.pair_id) is not None
+        assert repository.get_all_marks().get(pair1.pair_id) is not None
+
+        session.remove_pairs([pair0.pair_id, pair1.pair_id])
+
+        # Removed from memory
+        assert pair0.pair_id not in [p.pair_id for p in session.pairs]
+        assert pair1.pair_id not in [p.pair_id for p in session.pairs]
+        assert session.total == _EXPECTED_PAIRS - 2
+
+        # Removed from DB
+        marks = repository.get_all_marks()
+        assert pair0.pair_id not in marks
+        assert pair1.pair_id not in marks
 
 
 # ---------------------------------------------------------------------------

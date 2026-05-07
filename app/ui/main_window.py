@@ -364,6 +364,10 @@ class MainWindow(QMainWindow):
             self._move_thread.quit()
             self._move_thread = None
 
+        # Remove successfully moved pairs from session and DB marks
+        if result.moved_pair_ids:
+            self._session.remove_pairs(result.moved_pair_ids)
+
         msg = f"已移动: {result.moved} 个文件"
         if result.skipped:
             msg += f"\n跳过: {result.skipped}"
