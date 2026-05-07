@@ -5,10 +5,9 @@ import threading
 import time
 
 from PySide6.QtCore import Qt, QThread, Signal, QObject
-from PySide6.QtGui import QColor, QFont, QPixmap, QPainter, QWheelEvent
+from PySide6.QtGui import QColor, QPixmap, QPainter, QWheelEvent
 from PySide6.QtWidgets import (
-    QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene,
-    QGraphicsSimpleTextItem, QGraphicsView,
+    QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene, QGraphicsView,
     QLabel, QVBoxLayout, QWidget,
 )
 
@@ -56,8 +55,9 @@ class _PhotoView(QGraphicsView):
     _ZOOM_STEP = 1.15
 
     def __init__(self, parent=None) -> None:
-        scene = QGraphicsScene()
-        super().__init__(scene, parent)
+        super().__init__(parent)
+        scene = QGraphicsScene(self)   # parent=self keeps scene alive via Qt ownership
+        self.setScene(scene)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
@@ -75,14 +75,13 @@ class _PhotoView(QGraphicsView):
         self._tint.setVisible(False)
         scene.addItem(self._tint)
 
-        self._badge = QGraphicsSimpleTextItem()
-        f = QFont()
-        f.setBold(True)
-        f.setPointSize(14)
-        self._badge.setFont(f)
-        self._badge.setBrush(QColor(255, 255, 255))
-        self._badge.setVisible(False)
-        scene.addItem(self._badge)
+        # Badge lives in viewport coordinates so it stays readable at any zoom level.
+        self._badge_lbl = QLabel(self.viewport())
+        self._badge_lbl.setStyleSheet(
+            "color: white; font-size: 14px; font-weight: bold;"
+            " background: rgba(0,0,0,140); border-radius: 4px; padding: 2px 8px;"
+        )
+        self._badge_lbl.setVisible(False)
 
         self._fit_mode = True
 
@@ -106,18 +105,18 @@ class _PhotoView(QGraphicsView):
             self._tint.setVisible(False)
 
         if badge and has_img:
-            self._badge.setText(badge)
-            br = self._img.boundingRect()
-            bb = self._badge.boundingRect()
-            self._badge.setPos(br.right() - bb.width() - 10, br.top() + 10)
-            self._badge.setVisible(True)
+            self._badge_lbl.setText(badge)
+            self._badge_lbl.adjustSize()
+            self._reposition_badge()
+            self._badge_lbl.setVisible(True)
+            self._badge_lbl.raise_()
         else:
-            self._badge.setVisible(False)
+            self._badge_lbl.setVisible(False)
 
     def clear_image(self) -> None:
         self._img.setPixmap(QPixmap())
         self._tint.setVisible(False)
-        self._badge.setVisible(False)
+        self._badge_lbl.setVisible(False)
 
     # ------------------------------------------------------------------
     # Zoom / pan
@@ -136,6 +135,13 @@ class _PhotoView(QGraphicsView):
         super().resizeEvent(event)
         if self._fit_mode and not self._img.pixmap().isNull():
             self._do_fit()
+        if self._badge_lbl.isVisible():
+            self._reposition_badge()
+
+    def _reposition_badge(self) -> None:
+        margin = 10
+        lbl = self._badge_lbl
+        lbl.move(self.viewport().width() - lbl.width() - margin, margin)
 
     def _do_fit(self) -> None:
         if not self._img.pixmap().isNull():

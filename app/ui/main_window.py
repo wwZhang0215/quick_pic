@@ -147,11 +147,8 @@ class MainWindow(QMainWindow):
         sc(Qt.Key.Key_Left).activated.connect(self._session.previous)
         sc(Qt.Key.Key_Right).activated.connect(self._session.next)
 
-        # K / Space: mark KEEP then advance; pressing again unmarks (no advance)
-        sc("K").activated.connect(self._mark_keep_and_advance)
-        sc(Qt.Key.Key_Space).activated.connect(self._mark_keep_and_advance)
-
-        # U / Delete: unmark, stay on current photo
+        sc("K").activated.connect(self._mark_service.toggle_keep)
+        sc(Qt.Key.Key_Space).activated.connect(self._mark_service.toggle_keep)
         sc("U").activated.connect(self._mark_service.unmark_current)
         sc(Qt.Key.Key_Delete).activated.connect(self._mark_service.unmark_current)
 
@@ -259,17 +256,9 @@ class MainWindow(QMainWindow):
     # Folder key actions
     # ------------------------------------------------------------------
 
-    def _mark_keep_and_advance(self) -> None:
-        self._mark_service.toggle_keep()
-        # Advance only when the photo was just marked (not when toggled back to NONE)
-        if self._session.current and self._session.current.mark_type == MarkType.KEEP:
-            self._session.next()
-
     def _apply_folder_key(self, key: int) -> None:
         ok = self._mark_service.apply_folder_key(key)
-        if ok:
-            self._session.next()
-        else:
+        if not ok:
             reply = QMessageBox.question(
                 self, f"键 [{key}] 未绑定",
                 f"键 [{key}] 尚未绑定文件夹，是否现在绑定？",
